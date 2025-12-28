@@ -1,6 +1,6 @@
 import 'dart:io';
 import 'dart:convert';
-import 'dart:async'; // Tambahan untuk StreamSubscription
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:dio/dio.dart';
 import 'package:archive/archive_io.dart';
@@ -26,7 +26,6 @@ class _SoCuteAppState extends State<SoCuteApp> {
   String _targetName = "Select Target App";
   
   bool _useProxy = false;
-  // Default values for Proxy
   final TextEditingController _ipCtrl = TextEditingController(text: "192.168.1.10");
   final TextEditingController _portCtrl = TextEditingController(text: "8080");
   final TextEditingController _urlCtrl = TextEditingController(); 
@@ -34,7 +33,6 @@ class _SoCuteAppState extends State<SoCuteApp> {
   List<File> _scriptFiles = [];
   Map<String, bool> _selectedScripts = {}; 
 
-  // Variable untuk mengontrol proses yang berjalan
   Process? _runningProcess;
   bool _isRunning = false;
 
@@ -115,20 +113,15 @@ class _SoCuteAppState extends State<SoCuteApp> {
     }
   }
 
-  // --- STOP / KILL LOGIC (NEW) ---
+  // --- STOP / KILL LOGIC ---
   Future<void> _stopAndKill() async {
     if (_targetPackage.isEmpty) return;
 
     _log("\n[!!!] STOPPING PROCESS...");
     
     try {
-      // 1. Matikan proses Dart stream (jika ada)
       _runningProcess?.kill();
-      
-      // 2. Matikan paksa binary frida-inject (Cleanup)
       await Process.run('su', ['-c', 'pkill -f frida-inject']);
-      
-      // 3. Matikan Aplikasi Target (Force Stop)
       await Process.run('su', ['-c', 'am force-stop $_targetPackage']);
       
       _log("[*] Target '$_targetPackage' killed.");
@@ -156,19 +149,16 @@ class _SoCuteAppState extends State<SoCuteApp> {
       return;
     }
 
-    // Set UI to Running State
     setState(() => _isRunning = true);
 
     try {
       _log("--- STARTING INJECTION ---");
       
-      // 1. Setup Binary
       final internalDir = await getApplicationSupportDirectory();
       final internalBinary = File("${internalDir.path}/frida-bin");
       await internalBinary.writeAsBytes(await binaryExternal.readAsBytes());
       await Process.run('chmod', ['755', internalBinary.path]);
 
-      // 2. Generate Payload
       final payloadFile = File("$_baseFolder/payload.js");
       var sink = payloadFile.openWrite();
 
@@ -187,17 +177,12 @@ class _SoCuteAppState extends State<SoCuteApp> {
       await sink.close();
       _log("[*] Payload prepared.");
 
-      // 3. Execute Root Command
       _log("[*] Spawning Target: $_targetPackage");
       
-      // Command: su -c "binary -f package -s script"
-      // Note: Kita pakai -f (spawn) agar aplikasi restart bersih
       String cmd = "${internalBinary.path} -f $_targetPackage -s ${payloadFile.path}";
       
-      // Simpan proses ke variabel global agar bisa di-kill nanti
       _runningProcess = await Process.start('su', ['-c', cmd]);
       
-      // Listen to Output
       _runningProcess!.stdout.transform(utf8.decoder).listen((data) {
         _log(data.trim()); 
       });
@@ -206,7 +191,6 @@ class _SoCuteAppState extends State<SoCuteApp> {
         _log("[ERR] ${data.trim()}");
       });
 
-      // Deteksi jika proses mati sendiri (misal crash)
       _runningProcess!.exitCode.then((code) {
         if (mounted && _isRunning) {
            _log("[*] Process exited with code: $code");
@@ -249,7 +233,11 @@ class _SoCuteAppState extends State<SoCuteApp> {
         child: ListView.builder(
           itemCount: apps.length,
           itemBuilder: (c, i) => ListTile(
-            leading: apps[i] is WithIcon ? Image.memory((apps[i] as WithIcon).icon, width: 32) : null,
+            // --- PERBAIKAN DI SINI (WithIcon -> ApplicationWithIcon) ---
+            leading: apps[i] is ApplicationWithIcon 
+                ? Image.memory((apps[i] as ApplicationWithIcon).icon, width: 32) 
+                : null,
+            // -----------------------------------------------------------
             title: Text(apps[i].appName),
             subtitle: Text(apps[i].packageName),
             onTap: () {
@@ -275,7 +263,6 @@ class _SoCuteAppState extends State<SoCuteApp> {
         title: const Text("SoCute.apk (Frida GUI)"), 
         backgroundColor: Colors.black,
         actions: [
-          // Tombol Clear Log
           IconButton(
             icon: const Icon(Icons.delete_outline), 
             onPressed: () => setState(() => _logs = ""),
@@ -295,7 +282,7 @@ class _SoCuteAppState extends State<SoCuteApp> {
                 title: Text(_targetName, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
                 subtitle: Text(_targetPackage.isEmpty ? "Tap to select" : _targetPackage, style: const TextStyle(color: Colors.greenAccent)),
                 trailing: const Icon(Icons.touch_app, color: Colors.white),
-                onTap: _isRunning ? null : _pickApp, // Disable saat running
+                onTap: _isRunning ? null : _pickApp,
               ),
             ),
             
@@ -325,7 +312,6 @@ class _SoCuteAppState extends State<SoCuteApp> {
               title: const Text("Inject Options", style: TextStyle(color: Colors.white)),
               initiallyExpanded: true,
               children: [
-                // PERUBAHAN TEXT UX DI SINI
                 CheckboxListTile(
                   title: const Text("Enable Proxy (by frida-script)", style: TextStyle(color: Colors.white)),
                   subtitle: const Text("Injects HTTP proxy config via Java System Property", style: TextStyle(color: Colors.grey, fontSize: 10)),
@@ -356,13 +342,12 @@ class _SoCuteAppState extends State<SoCuteApp> {
 
             const SizedBox(height: 10),
             
-            // 4. ACTION BUTTON (TOGGLE START/STOP)
+            // 4. ACTION BUTTON
             ElevatedButton(
               style: ElevatedButton.styleFrom(
                 backgroundColor: _isRunning ? Colors.redAccent : Colors.greenAccent, 
                 padding: const EdgeInsets.symmetric(vertical: 15)
               ),
-              // Jika Running -> Stop, Jika Mati -> Launch
               onPressed: _isRunning ? _stopAndKill : _launchAndInject,
               child: Text(
                 _isRunning ? "STOP & KILL APP" : "LAUNCH & INJECT", 
