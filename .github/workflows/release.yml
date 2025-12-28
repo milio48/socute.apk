@@ -1,4 +1,4 @@
-name: Build & Release Socute (Python Fix)
+name: Build & Release Socute (Python fix)
 
 on:
   push:
