@@ -1,4 +1,4 @@
-name: Build & Release Socute (Dual)
+name: Build & Release Socute (dual)
 
 on:
   push:
