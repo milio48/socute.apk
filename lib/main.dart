@@ -287,47 +287,54 @@ class _SoCuteAppState extends State<SoCuteApp> {
                 padding: const EdgeInsets.all(10),
                 child: Column(
                   children: [
+                    // JIKA BINARY SUDAH ADA: Tampilkan status + Tombol Hapus
                     if (binaryExists) 
                       Row(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                           const Text("Binary Ready (v17.5.2) ✅", style: TextStyle(color: Colors.green)),
-                           const SizedBox(width: 10),
-                           // DELETE BUTTON: Allows user to reset and change version
-                           IconButton(
-                             icon: const Icon(Icons.delete_forever, color: Colors.red),
-                             tooltip: "Delete & Change Version",
-                             onPressed: () {
-                               try {
-                                 File("$_baseFolder/frida-inject").deleteSync();
-                                 setState(() {}); 
-                               } catch (e) { _log("[!] Delete failed: $e"); }
-                             },
-                           )
+                          const Text("Binary Ready (v16.1.4) ✅", style: TextStyle(color: Colors.green, fontWeight: FontWeight.bold)),
+                          const SizedBox(width: 10),
+                          IconButton(
+                            icon: const Icon(Icons.delete_forever, color: Colors.red),
+                            tooltip: "Delete & Change Version",
+                            onPressed: () {
+                              // Hapus file binary agar user bisa download ulang / ganti versi
+                              try {
+                                File("$_baseFolder/frida-inject").deleteSync();
+                                setState(() {}); // Refresh UI agar TextField muncul lagi
+                              } catch (e) {
+                                _log("[!] Failed to delete: $e");
+                              }
+                            },
+                          )
                         ],
                       ),
-                    
+
+                    // JIKA BINARY BELUM ADA: Tampilkan Kolom URL (Bisa Edit) + Tombol Download
                     if (!binaryExists) ...[
                       const Text("Binary Missing ❌", style: TextStyle(color: Colors.red)),
-                      // EDITABLE URL FIELD
                       TextField(
                         controller: _urlCtrl, 
-                        style: const TextStyle(color: Colors.white, fontSize: 11), 
+                        style: const TextStyle(color: Colors.white, fontSize: 12), 
                         decoration: const InputDecoration(
                           labelText: "Frida Binary URL (Editable)",
                           labelStyle: TextStyle(color: Colors.grey),
-                          helperText: "Suggest: 17.5.2 (android/linux)",
+                          helperText: "You can change the version manually (e.g. 16.2.1)",
                           helperStyle: TextStyle(color: Colors.white30)
                         )
                       ),
                       const SizedBox(height: 5),
-                      ElevatedButton(onPressed: _downloadBinary, child: const Text("Download"))
+                      ElevatedButton.icon(
+                        icon: const Icon(Icons.download),
+                        label: const Text("Download & Install"),
+                        onPressed: _downloadBinary, 
+                      )
                     ]
                   ],
                 ),
               ),
             ),
-
+            
             // 3. Options
             ExpansionTile(title: const Text("Options", style: TextStyle(color: Colors.white)), children: [
                 CheckboxListTile(title: const Text("Proxy", style: TextStyle(color: Colors.white)), value: _useProxy, onChanged: _isRunning ? null : (v) => setState(() => _useProxy = v!)),
