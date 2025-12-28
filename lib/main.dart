@@ -32,6 +32,8 @@ class _SoCuteAppState extends State<SoCuteApp> {
   bool _useProxy = false;
   final TextEditingController _ipCtrl = TextEditingController(text: "192.168.1.10");
   final TextEditingController _portCtrl = TextEditingController(text: "8080");
+  
+  // URL Controller: Users can edit this manually before downloading
   final TextEditingController _urlCtrl = TextEditingController(); 
 
   List<File> _scriptFiles = [];
@@ -43,8 +45,7 @@ class _SoCuteAppState extends State<SoCuteApp> {
   @override
   void initState() {
     super.initState();
-    // SAFE MODE: Do not run heavy logic immediately.
-    // Wait for the first frame to render to prevent start-up crashes.
+    // SAFE MODE: Wait for the first frame to render to prevent start-up crashes.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _safeInit();
     });
@@ -61,7 +62,6 @@ class _SoCuteAppState extends State<SoCuteApp> {
       await Permission.storage.request();
       
       // 2. Request Manage External Storage (Android 11+)
-      // Only request if status is denied to avoid unnecessary crashes on older phones
       if (await Permission.manageExternalStorage.status.isDenied) {
         try {
             await Permission.manageExternalStorage.request();
@@ -90,10 +90,17 @@ class _SoCuteAppState extends State<SoCuteApp> {
         else if (abi.contains('x86_64')) arch = 'x86_64';
         else if (abi.contains('x86')) arch = 'x86';
         
-        // Recommended Frida version
-        String ver = "16.1.4"; 
+        // Latest version per user request: 17.5.2
+        String ver = "17.5.2"; 
+        
+        // We default to 'android' build for compatibility, but user can change it to 'linux' manually.
+        String defaultUrl = "https://github.com/frida/frida/releases/download/$ver/frida-inject-$ver-android-$arch.xz";
+        
         setState(() {
-          _urlCtrl.text = "https://github.com/frida/frida/releases/download/$ver/frida-inject-$ver-android-$arch.xz";
+          // Only set if empty so we don't overwrite user's manual input on reload
+          if (_urlCtrl.text.isEmpty) {
+            _urlCtrl.text = defaultUrl;
+          }
         });
     } catch (e) {
         _log("[!] Error Detecting Arch: $e");
@@ -136,6 +143,7 @@ class _SoCuteAppState extends State<SoCuteApp> {
       var dir = await getApplicationSupportDirectory();
       String tempPath = "${dir.path}/temp.xz";
       
+      // Download from the URL currently in the text field (User Control)
       await Dio().download(_urlCtrl.text, tempPath);
       _log("[*] Download complete. Extracting...");
 
@@ -240,7 +248,6 @@ class _SoCuteAppState extends State<SoCuteApp> {
             child: ListView.builder(
               itemCount: apps.length,
               itemBuilder: (c, i) => ListTile(
-                // TYPO FIX: Changed 'WithIcon' to 'ApplicationWithIcon'
                 leading: apps[i] is ApplicationWithIcon 
                     ? Image.memory((apps[i] as ApplicationWithIcon).icon, width: 32) 
                     : null,
@@ -270,18 +277,69 @@ class _SoCuteAppState extends State<SoCuteApp> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            // 1. Target Selector
             Card(color: Colors.grey[850], child: ListTile(title: Text(_targetName, style: const TextStyle(color: Colors.white)), subtitle: Text(_targetPackage, style: const TextStyle(color: Colors.green)), onTap: _isRunning ? null : _pickApp)),
-            Card(color: Colors.grey[850], child: Padding(padding: const EdgeInsets.all(10), child: Column(children: [
-                Text(binaryExists ? "Binary Ready ✅" : "Binary Missing ❌", style: TextStyle(color: binaryExists ? Colors.green : Colors.red)),
-                if (!binaryExists) ElevatedButton(onPressed: _downloadBinary, child: const Text("Download"))
-            ]))),
+            
+            // 2. Binary Config
+            Card(
+              color: Colors.grey[850],
+              child: Padding(
+                padding: const EdgeInsets.all(10),
+                child: Column(
+                  children: [
+                    if (binaryExists) 
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                           const Text("Binary Ready (v17.5.2) ✅", style: TextStyle(color: Colors.green)),
+                           const SizedBox(width: 10),
+                           // DELETE BUTTON: Allows user to reset and change version
+                           IconButton(
+                             icon: const Icon(Icons.delete_forever, color: Colors.red),
+                             tooltip: "Delete & Change Version",
+                             onPressed: () {
+                               try {
+                                 File("$_baseFolder/frida-inject").deleteSync();
+                                 setState(() {}); 
+                               } catch (e) { _log("[!] Delete failed: $e"); }
+                             },
+                           )
+                        ],
+                      ),
+                    
+                    if (!binaryExists) ...[
+                      const Text("Binary Missing ❌", style: TextStyle(color: Colors.red)),
+                      // EDITABLE URL FIELD
+                      TextField(
+                        controller: _urlCtrl, 
+                        style: const TextStyle(color: Colors.white, fontSize: 11), 
+                        decoration: const InputDecoration(
+                          labelText: "Frida Binary URL (Editable)",
+                          labelStyle: TextStyle(color: Colors.grey),
+                          helperText: "Suggest: 17.5.2 (android/linux)",
+                          helperStyle: TextStyle(color: Colors.white30)
+                        )
+                      ),
+                      const SizedBox(height: 5),
+                      ElevatedButton(onPressed: _downloadBinary, child: const Text("Download"))
+                    ]
+                  ],
+                ),
+              ),
+            ),
+
+            // 3. Options
             ExpansionTile(title: const Text("Options", style: TextStyle(color: Colors.white)), children: [
                 CheckboxListTile(title: const Text("Proxy", style: TextStyle(color: Colors.white)), value: _useProxy, onChanged: _isRunning ? null : (v) => setState(() => _useProxy = v!)),
                 if(_useProxy) Row(children: [Expanded(child: TextField(controller: _ipCtrl, style: const TextStyle(color: Colors.white))), const SizedBox(width:10), Expanded(child: TextField(controller: _portCtrl, style: const TextStyle(color: Colors.white)))]),
                 IconButton(icon: const Icon(Icons.refresh, color: Colors.white), onPressed: _refreshFiles),
                 ..._scriptFiles.map((f) => CheckboxListTile(title: Text(f.path.split('/').last, style: const TextStyle(color: Colors.white)), value: _selectedScripts[f.path], onChanged: (v) => setState(() => _selectedScripts[f.path] = v!))).toList()
             ]),
+            
+            // 4. Launch Button
             ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: _isRunning ? Colors.red : Colors.green), onPressed: _isRunning ? _stopAndKill : _launchAndInject, child: Text(_isRunning ? "STOP" : "LAUNCH")),
+            
+            // 5. Logs
             Container(height: 200, padding: const EdgeInsets.all(5), color: Colors.black, child: SingleChildScrollView(reverse: true, child: Text(_logs, style: const TextStyle(color: Colors.green, fontFamily: 'monospace'))))
           ],
         ),
