@@ -1,4 +1,4 @@
-name: Build & Release Socute (stable & robust)
+name: Build & Release Socute (Stable & robust)
 
 on:
   push:
