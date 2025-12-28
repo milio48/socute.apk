@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'dart:convert';
+import 'dart:async'; // Tambahan untuk StreamSubscription
 import 'package:flutter/material.dart';
 import 'package:dio/dio.dart';
 import 'package:archive/archive_io.dart';
@@ -28,12 +29,15 @@ class _SoCuteAppState extends State<SoCuteApp> {
   // Default values for Proxy
   final TextEditingController _ipCtrl = TextEditingController(text: "192.168.1.10");
   final TextEditingController _portCtrl = TextEditingController(text: "8080");
-  final TextEditingController _urlCtrl = TextEditingController(); // Auto-filled later
+  final TextEditingController _urlCtrl = TextEditingController(); 
 
   List<File> _scriptFiles = [];
-  Map<String, bool> _selectedScripts = {}; // Tracks which script is checked
+  Map<String, bool> _selectedScripts = {}; 
 
-  // The external folder where user puts scripts and binary
+  // Variable untuk mengontrol proses yang berjalan
+  Process? _runningProcess;
+  bool _isRunning = false;
+
   final String _baseFolder = "/sdcard/socute-apk";
   
   @override
@@ -44,13 +48,8 @@ class _SoCuteAppState extends State<SoCuteApp> {
 
   // --- INITIALIZATION ---
   Future<void> _initApp() async {
-    // 1. Request Storage Permissions
     await [Permission.storage, Permission.manageExternalStorage].request();
-    
-    // 2. Detect CPU Arch to suggest correct binary URL
     await _detectArchAndSetUrl();
-    
-    // 3. Scan for existing scripts in /sdcard/socute-apk/scripts
     await _refreshFiles();
   }
 
@@ -58,12 +57,11 @@ class _SoCuteAppState extends State<SoCuteApp> {
     var androidInfo = await DeviceInfoPlugin().androidInfo;
     var abi = androidInfo.supportedAbis[0];
     
-    String arch = 'arm64'; // Default for modern phones
+    String arch = 'arm64'; 
     if (abi.contains('armeabi')) arch = 'arm';
     else if (abi.contains('x86_64')) arch = 'x86_64';
     else if (abi.contains('x86')) arch = 'x86';
     
-    // Hardcoded recommended version
     String ver = "16.1.4"; 
     setState(() {
       _urlCtrl.text = "https://github.com/frida/frida/releases/download/$ver/frida-inject-$ver-android-$arch.xz";
@@ -73,19 +71,14 @@ class _SoCuteAppState extends State<SoCuteApp> {
   // --- FILE SYSTEM LOGIC ---
   Future<void> _refreshFiles() async {
     final dir = Directory("$_baseFolder/scripts");
-    
-    // Create folder if not exists
     if (!await dir.exists()) {
       await dir.create(recursive: true);
       _log("Created folder: $_baseFolder/scripts");
     }
 
-    // List .js files
     List<FileSystemEntity> files = dir.listSync();
     setState(() {
       _scriptFiles = files.whereType<File>().where((f) => f.path.endsWith('.js')).toList();
-      
-      // Initialize checkboxes for new files
       for (var f in _scriptFiles) {
         if (!_selectedScripts.containsKey(f.path)) {
           _selectedScripts[f.path] = false;
@@ -94,7 +87,7 @@ class _SoCuteAppState extends State<SoCuteApp> {
     });
   }
 
-  // --- CORE LOGIC: DOWNLOAD & INSTALL BINARY ---
+  // --- DOWNLOAD LOGIC ---
   Future<void> _downloadBinary() async {
     try {
       _log("[*] Downloading binary...");
@@ -102,34 +95,56 @@ class _SoCuteAppState extends State<SoCuteApp> {
       var dir = await getApplicationSupportDirectory();
       String tempPath = "${dir.path}/temp.xz";
       
-      // Download .xz file
       await Dio().download(_urlCtrl.text, tempPath);
       _log("[*] Download complete. Extracting...");
 
-      // Extract .xz content
       List<int> xzBytes = File(tempPath).readAsBytesSync();
       List<int> tarBytes = XZDecoder().decodeBytes(xzBytes);
       
-      // Save raw binary to /sdcard/socute-apk/frida-inject
       File("$_baseFolder/frida-inject")
         ..createSync(recursive: true)
         ..writeAsBytesSync(tarBytes);
       
-      // Cleanup temp file
       File(tempPath).deleteSync();
       _log("[*] Binary saved to $_baseFolder/frida-inject");
       if (!mounted) return;
       
-      // Force UI refresh
       setState(() {}); 
     } catch (e) {
       _log("[!] Error downloading: $e");
     }
   }
 
-  // --- CORE LOGIC: LAUNCH & INJECT ---
+  // --- STOP / KILL LOGIC (NEW) ---
+  Future<void> _stopAndKill() async {
+    if (_targetPackage.isEmpty) return;
+
+    _log("\n[!!!] STOPPING PROCESS...");
+    
+    try {
+      // 1. Matikan proses Dart stream (jika ada)
+      _runningProcess?.kill();
+      
+      // 2. Matikan paksa binary frida-inject (Cleanup)
+      await Process.run('su', ['-c', 'pkill -f frida-inject']);
+      
+      // 3. Matikan Aplikasi Target (Force Stop)
+      await Process.run('su', ['-c', 'am force-stop $_targetPackage']);
+      
+      _log("[*] Target '$_targetPackage' killed.");
+      _log("[*] Frida process terminated.");
+    } catch (e) {
+      _log("[!] Error stopping: $e");
+    }
+
+    setState(() {
+      _isRunning = false;
+      _runningProcess = null;
+    });
+  }
+
+  // --- LAUNCH LOGIC ---
   Future<void> _launchAndInject() async {
-    // Validation
     if (_targetPackage.isEmpty) {
       _log("[!] Please select target app first!");
       return;
@@ -141,31 +156,27 @@ class _SoCuteAppState extends State<SoCuteApp> {
       return;
     }
 
+    // Set UI to Running State
+    setState(() => _isRunning = true);
+
     try {
       _log("--- STARTING INJECTION ---");
       
-      // 1. COPY BINARY TO INTERNAL STORAGE (Bypass NoExec limitation)
-      _log("[1] Copying binary to internal system...");
+      // 1. Setup Binary
       final internalDir = await getApplicationSupportDirectory();
       final internalBinary = File("${internalDir.path}/frida-bin");
-      
       await internalBinary.writeAsBytes(await binaryExternal.readAsBytes());
-      
-      // Grant Execution Permission (chmod +x)
       await Process.run('chmod', ['755', internalBinary.path]);
 
-      // 2. GENERATE PAYLOAD (MERGE SCRIPTS)
-      _log("[2] Merging scripts...");
+      // 2. Generate Payload
       final payloadFile = File("$_baseFolder/payload.js");
       var sink = payloadFile.openWrite();
 
-      // A. Inject Proxy Script (if enabled)
       if (_useProxy) {
         sink.writeln('// --- PROXY HOOK ---');
         sink.writeln(_generateProxyScript(_ipCtrl.text, _portCtrl.text));
       }
 
-      // B. Inject User Selected Scripts
       _selectedScripts.forEach((path, isSelected) {
         if (isSelected) {
           sink.writeln('\n// --- FILE: ${path.split('/').last} ---');
@@ -174,37 +185,45 @@ class _SoCuteAppState extends State<SoCuteApp> {
       });
       
       await sink.close();
-      _log("    Payload saved to: ${payloadFile.path}");
+      _log("[*] Payload prepared.");
 
-      // 3. EXECUTE ROOT COMMAND
-      _log("[3] Spawning Target: $_targetPackage");
+      // 3. Execute Root Command
+      _log("[*] Spawning Target: $_targetPackage");
       
       // Command: su -c "binary -f package -s script"
+      // Note: Kita pakai -f (spawn) agar aplikasi restart bersih
       String cmd = "${internalBinary.path} -f $_targetPackage -s ${payloadFile.path}";
       
-      // Start process and stream the output logs
-      Process process = await Process.start('su', ['-c', cmd]);
+      // Simpan proses ke variabel global agar bisa di-kill nanti
+      _runningProcess = await Process.start('su', ['-c', cmd]);
       
-      // Listen to Standard Output (stdout)
-      process.stdout.transform(utf8.decoder).listen((data) {
-        _log(data); 
+      // Listen to Output
+      _runningProcess!.stdout.transform(utf8.decoder).listen((data) {
+        _log(data.trim()); 
       });
       
-      // Listen to Error Output (stderr)
-      process.stderr.transform(utf8.decoder).listen((data) {
-        _log("[ERR] $data");
+      _runningProcess!.stderr.transform(utf8.decoder).listen((data) {
+        _log("[ERR] ${data.trim()}");
+      });
+
+      // Deteksi jika proses mati sendiri (misal crash)
+      _runningProcess!.exitCode.then((code) {
+        if (mounted && _isRunning) {
+           _log("[*] Process exited with code: $code");
+           setState(() => _isRunning = false);
+        }
       });
 
     } catch (e) {
       _log("[!] Error: $e");
+      setState(() => _isRunning = false);
     }
   }
 
-  // Helper to generate Java Hook for Proxy
   String _generateProxyScript(String ip, String port) {
     return """
     Java.perform(function() {
-      console.log("[+] Force Proxy: $ip:$port");
+      console.log("[+] Force Proxy (frida-script): $ip:$port");
       var System = Java.use("java.lang.System");
       System.setProperty("http.proxyHost", "$ip");
       System.setProperty("http.proxyPort", "$port");
@@ -214,17 +233,14 @@ class _SoCuteAppState extends State<SoCuteApp> {
     """;
   }
 
-  // --- UI HELPERS ---
-  
-  // Appends text to terminal log
   void _log(String text) {
+    if (!mounted) return;
     setState(() => _logs += "$text\n");
   }
 
-  // Opens a dialog to pick installed apps
   Future<void> _pickApp() async {
     List<Application> apps = await DeviceApps.getInstalledApplications(includeAppIcons: true);
-    
+    if (!mounted) return;
     showDialog(context: context, builder: (ctx) => AlertDialog(
       title: const Text("Select App"),
       content: SizedBox(
@@ -249,14 +265,24 @@ class _SoCuteAppState extends State<SoCuteApp> {
     ));
   }
 
-  // --- VIEW BUILDER (UI LAYOUT) ---
   @override
   Widget build(BuildContext context) {
     bool binaryExists = File("$_baseFolder/frida-inject").existsSync();
 
     return Scaffold(
-      backgroundColor: Colors.grey[900], // Hacker theme
-      appBar: AppBar(title: const Text("SoCute.apk (Frida GUI)"), backgroundColor: Colors.black),
+      backgroundColor: Colors.grey[900], 
+      appBar: AppBar(
+        title: const Text("SoCute.apk (Frida GUI)"), 
+        backgroundColor: Colors.black,
+        actions: [
+          // Tombol Clear Log
+          IconButton(
+            icon: const Icon(Icons.delete_outline), 
+            onPressed: () => setState(() => _logs = ""),
+            tooltip: "Clear Logs",
+          )
+        ],
+      ),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(10),
         child: Column(
@@ -269,7 +295,7 @@ class _SoCuteAppState extends State<SoCuteApp> {
                 title: Text(_targetName, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
                 subtitle: Text(_targetPackage.isEmpty ? "Tap to select" : _targetPackage, style: const TextStyle(color: Colors.greenAccent)),
                 trailing: const Icon(Icons.touch_app, color: Colors.white),
-                onTap: _pickApp,
+                onTap: _isRunning ? null : _pickApp, // Disable saat running
               ),
             ),
             
@@ -294,27 +320,27 @@ class _SoCuteAppState extends State<SoCuteApp> {
               ),
             ),
 
-            // 3. INJECT OPTIONS (Proxy & Scripts)
+            // 3. INJECT OPTIONS
             ExpansionTile(
               title: const Text("Inject Options", style: TextStyle(color: Colors.white)),
               initiallyExpanded: true,
               children: [
-                // Proxy Config
+                // PERUBAHAN TEXT UX DI SINI
                 CheckboxListTile(
-                  title: const Text("Enable Proxy", style: TextStyle(color: Colors.white)),
+                  title: const Text("Enable Proxy (by frida-script)", style: TextStyle(color: Colors.white)),
+                  subtitle: const Text("Injects HTTP proxy config via Java System Property", style: TextStyle(color: Colors.grey, fontSize: 10)),
                   value: _useProxy,
-                  onChanged: (v) => setState(() => _useProxy = v!),
+                  onChanged: _isRunning ? null : (v) => setState(() => _useProxy = v!),
                 ),
                 if (_useProxy) Row(
                   children: [
-                    Expanded(child: TextField(controller: _ipCtrl, style: const TextStyle(color: Colors.white), decoration: const InputDecoration(labelText: "IP", labelStyle: TextStyle(color: Colors.grey)))),
+                    Expanded(child: TextField(controller: _ipCtrl, enabled: !_isRunning, style: const TextStyle(color: Colors.white), decoration: const InputDecoration(labelText: "IP", labelStyle: TextStyle(color: Colors.grey)))),
                     const SizedBox(width: 10),
-                    Expanded(child: TextField(controller: _portCtrl, style: const TextStyle(color: Colors.white), decoration: const InputDecoration(labelText: "Port", labelStyle: TextStyle(color: Colors.grey)))),
+                    Expanded(child: TextField(controller: _portCtrl, enabled: !_isRunning, style: const TextStyle(color: Colors.white), decoration: const InputDecoration(labelText: "Port", labelStyle: TextStyle(color: Colors.grey)))),
                   ],
                 ),
                 const Divider(color: Colors.grey),
                 
-                // Script List from /sdcard
                 Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
                   const Text("  Scripts (/socute-apk/scripts)", style: TextStyle(color: Colors.grey)),
                   IconButton(icon: const Icon(Icons.refresh, color: Colors.white), onPressed: _refreshFiles)
@@ -322,7 +348,7 @@ class _SoCuteAppState extends State<SoCuteApp> {
                 ..._scriptFiles.map((f) => CheckboxListTile(
                   title: Text(f.path.split('/').last, style: const TextStyle(color: Colors.white)),
                   value: _selectedScripts[f.path],
-                  onChanged: (v) => setState(() => _selectedScripts[f.path] = v!),
+                  onChanged: _isRunning ? null : (v) => setState(() => _selectedScripts[f.path] = v!),
                   dense: true,
                 )).toList(),
               ],
@@ -330,22 +356,29 @@ class _SoCuteAppState extends State<SoCuteApp> {
 
             const SizedBox(height: 10),
             
-            // 4. LAUNCH BUTTON
+            // 4. ACTION BUTTON (TOGGLE START/STOP)
             ElevatedButton(
-              style: ElevatedButton.styleFrom(backgroundColor: Colors.greenAccent, padding: const EdgeInsets.symmetric(vertical: 15)),
-              onPressed: _launchAndInject,
-              child: const Text("LAUNCH & INJECT", style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 18)),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: _isRunning ? Colors.redAccent : Colors.greenAccent, 
+                padding: const EdgeInsets.symmetric(vertical: 15)
+              ),
+              // Jika Running -> Stop, Jika Mati -> Launch
+              onPressed: _isRunning ? _stopAndKill : _launchAndInject,
+              child: Text(
+                _isRunning ? "STOP & KILL APP" : "LAUNCH & INJECT", 
+                style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 18)
+              ),
             ),
 
             const SizedBox(height: 10),
 
-            // 5. TERMINAL LOG OUTPUT
+            // 5. TERMINAL LOG
             Container(
               height: 200,
               padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(color: Colors.black, border: Border.all(color: Colors.green)),
+              decoration: BoxDecoration(color: Colors.black, border: Border.all(color: _isRunning ? Colors.red : Colors.green)),
               child: SingleChildScrollView(
-                reverse: true, // Auto scroll to bottom
+                reverse: true, 
                 child: Text(_logs, style: const TextStyle(color: Colors.green, fontFamily: 'monospace')),
               ),
             )
