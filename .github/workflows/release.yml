@@ -1,4 +1,4 @@
-name: Build & Release Socute (Stable & Robust)
+name: Build & Release Socute (Python Fix)
 
 on:
   push:
@@ -14,115 +14,125 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # 1. Checkout Repository
       - uses: actions/checkout@v3
 
-      # 2. Setup Java 17 (Required for Flutter 3.19+)
       - name: Setup Java
         uses: actions/setup-java@v3
         with:
           distribution: 'zulu'
           java-version: '17'
 
-      # 3. Setup Flutter Environment
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
           channel: 'stable'
           flutter-version: '3.19.0'
 
-      # 4. Initialize Project & Install Dependencies
-      # We recreate the project structure to ensure clean build files,
-      # then explicitly add dependencies to avoid missing package errors.
       - name: Generate Project & Install Dependencies
         run: |
+          # 1. Create project
           flutter create . --project-name socute --org com.socute
           flutter config --no-analytics
           
-          # Force install all required packages
+          # 2. Install dependencies
           flutter pub add dio archive path_provider device_info_plus permission_handler device_apps flutter_launcher_icons
 
-      # 5. Generate App Icon (Robust Method)
-      # Uses printf to avoid syntax errors with Heredoc inside if-blocks
-      - name: Setup & Generate App Icon
+      # --- GENERATE ICON (Using Python for safety) ---
+      - name: Generate App Icon
         run: |
-          if [ -f "icon.png" ]; then
-            echo "Custom icon found! Generating..."
-            printf "flutter_icons:\n  android: \"ic_launcher\"\n  ios: true\n  image_path: \"icon.png\"\n  min_sdk_android: 21\n" > flutter_launcher_icons.yaml
-            flutter pub run flutter_launcher_icons
-          else
-            echo "No icon.png found. Using default Flutter logo."
-          fi
-
-      # 6. Overwrite AndroidManifest.xml (Crucial Fix)
-      # We completely replace the manifest to guarantee permissions are present.
-      # Added 'requestLegacyExternalStorage="true"' specifically for Android 10 support.
-      - name: Overwrite AndroidManifest.xml
-        run: |
-          rm android/app/src/main/AndroidManifest.xml
+          python3 -c "
+          import os
+          import subprocess
           
-          cat <<EOF > android/app/src/main/AndroidManifest.xml
-          <manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.socute">
-              <uses-permission android:name="android.permission.INTERNET"/>
-              <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/>
-              <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"/>
-              <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"/>
-              <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES"/>
+          if os.path.exists('icon.png'):
+              print('Custom icon found! Generating config...')
+              config = \"\"\"
+          flutter_icons:
+            android: 'ic_launcher'
+            ios: true
+            image_path: 'icon.png'
+            min_sdk_android: 21
+          \"\"\"
+              with open('flutter_launcher_icons.yaml', 'w') as f:
+                  f.write(config.strip())
+              subprocess.run(['flutter', 'pub', 'run', 'flutter_launcher_icons'], check=True)
+          else:
+              print('No icon.png found. Skipping.')
+          "
+
+      # --- PERMISSION FIX (PYTHON METHOD - BULLETPROOF) ---
+      - name: Force Overwrite AndroidManifest.xml
+        run: |
+          python3 -c "
+          import os
+          
+          # Path ke Manifest
+          manifest_path = 'android/app/src/main/AndroidManifest.xml'
+          
+          # Hapus file lama jika ada
+          if os.path.exists(manifest_path):
+              os.remove(manifest_path)
+          
+          # Isi Manifest Baru (Lengkap dengan Izin & Legacy Storage)
+          # Perhatikan package name: com.socute.socute (sesuai hasil flutter create)
+          manifest_content = \"\"\"<manifest xmlns:android='http://schemas.android.com/apk/res/android' package='com.socute.socute'>
+              <uses-permission android:name='android.permission.INTERNET'/>
+              <uses-permission android:name='android.permission.READ_EXTERNAL_STORAGE'/>
+              <uses-permission android:name='android.permission.WRITE_EXTERNAL_STORAGE'/>
+              <uses-permission android:name='android.permission.MANAGE_EXTERNAL_STORAGE'/>
+              <uses-permission android:name='android.permission.QUERY_ALL_PACKAGES'/>
               
               <application
-                  android:label="SoCute"
-                  android:name="\${applicationName}"
-                  android:icon="@mipmap/ic_launcher"
-                  android:requestLegacyExternalStorage="true"> 
+                  android:label='SoCute'
+                  android:name='\${applicationName}'
+                  android:icon='@mipmap/ic_launcher'
+                  android:requestLegacyExternalStorage='true'>
                   <activity
-                      android:name=".MainActivity"
-                      android:exported="true"
-                      android:launchMode="singleTop"
-                      android:theme="@style/LaunchTheme"
-                      android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
-                      android:hardwareAccelerated="true"
-                      android:windowSoftInputMode="adjustResize">
+                      android:name='.MainActivity'
+                      android:exported='true'
+                      android:launchMode='singleTop'
+                      android:theme='@style/LaunchTheme'
+                      android:configChanges='orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode'
+                      android:hardwareAccelerated='true'
+                      android:windowSoftInputMode='adjustResize'>
                       <meta-data
-                        android:name="io.flutter.embedding.android.NormalTheme"
-                        android:resource="@style/NormalTheme"
+                        android:name='io.flutter.embedding.android.NormalTheme'
+                        android:resource='@style/NormalTheme'
                         />
                       <intent-filter>
-                          <action android:name="android.intent.action.MAIN"/>
-                          <category android:name="android.intent.category.LAUNCHER"/>
+                          <action android:name='android.intent.action.MAIN'/>
+                          <category android:name='android.intent.category.LAUNCHER'/>
                       </intent-filter>
                   </activity>
                   <meta-data
-                      android:name="flutterEmbedding"
-                      android:value="2" />
+                      android:name='flutterEmbedding'
+                      android:value='2' />
               </application>
-          </manifest>
-          EOF
+          </manifest>\"\"\"
+          
+          # Tulis file baru
+          with open(manifest_path, 'w') as f:
+              f.write(manifest_content)
+          
+          print('✅ AndroidManifest.xml has been successfully overwritten with PERMISSIONS!')
+          "
 
-      # 7. Finalize Dependencies
       - name: Install Dart Dependencies
         run: flutter pub get
 
-      # ========================================================
-      # PHASE 1: BUILD DEBUG VERSION (For Logs/Troubleshooting)
-      # ========================================================
+      # --- BUILD DUAL APK ---
       - name: Build Debug APK
         run: flutter build apk --debug --no-tree-shake-icons
 
       - name: Rename Debug APK
         run: mv build/app/outputs/flutter-apk/app-debug.apk build/app/outputs/flutter-apk/socute-debug.apk
 
-      # ========================================================
-      # PHASE 2: BUILD RELEASE VERSION (Lightweight/Production)
-      # ========================================================
       - name: Build Release APK
         run: flutter build apk --release --no-tree-shake-icons
 
       - name: Rename Release APK
         run: mv build/app/outputs/flutter-apk/app-release.apk build/app/outputs/flutter-apk/socute-release.apk
 
-      # ========================================================
-      # UPLOAD ARTIFACTS
-      # ========================================================
       - name: Create Release & Upload ALL APKs
         uses: ncipollo/release-action@v1
         with:
@@ -131,15 +141,10 @@ jobs:
           tag: ${{ github.ref_name }}
           name: Release ${{ github.ref_name }}
           body: |
-            **Stable Release with Android 10 Fixes.**
+            Fix Permission (Python Method).
             
-            📂 **Downloads:**
-            - `socute-release.apk` : Small size (~20MB). Recommended for daily use.
-            - `socute-debug.apk` : Large size (~140MB). Use this if the app crashes, as it provides detailed logs.
-            
-            🔧 **Changelog:**
-            - Fixed `Permission Denied` on Android 10 (Legacy Storage enabled).
-            - Added dual build output (Debug/Release).
-            - Improved binary download reliability.
+            📂 **Files:**
+            - `socute-release.apk` : Lightweight version.
+            - `socute-debug.apk` : Debug logs version.
           allowUpdates: true
           makeLatest: true
