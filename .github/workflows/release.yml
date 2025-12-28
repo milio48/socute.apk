@@ -30,10 +30,35 @@ jobs:
 
       - name: Generate Project & Install Dependencies
         run: |
+          # Create project
           flutter create . --project-name socute --org com.socute
           flutter config --no-analytics
-          flutter pub add dio archive path_provider device_info_plus permission_handler device_apps
+          
+          # Install libraries (termasuk library pembuat icon)
+          flutter pub add dio archive path_provider device_info_plus permission_handler device_apps flutter_launcher_icons
 
+      - name: Setup & Generate App Icon
+        run: |
+          # 1. Cek apakah user sudah upload icon.png
+          if [ -f "icon.png" ]; then
+            echo "Custom icon found! Generating..."
+            
+            # 2. Buat file konfigurasi icon sementara
+            cat <<EOF > flutter_launcher_icons.yaml
+            flutter_icons:
+              android: "ic_launcher"
+              ios: true
+              image_path: "icon.png"
+              min_sdk_android: 21
+            EOF
+            
+            # 3. Jalankan mesin pembuat icon
+            flutter pub run flutter_launcher_icons
+          else
+            echo "No icon.png found. Using default Flutter logo."
+          fi
+
+      # --- OVERWRITE MANIFEST (Permission Fix) ---
       - name: Overwrite AndroidManifest.xml
         run: |
           rm android/app/src/main/AndroidManifest.xml
@@ -46,7 +71,7 @@ jobs:
               <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES"/>
               
               <application
-                  android:label="socute"
+                  android:label="SoCute"
                   android:name="\${applicationName}"
                   android:icon="@mipmap/ic_launcher">
                   <activity
@@ -76,7 +101,6 @@ jobs:
       - name: Install Dart Dependencies
         run: flutter pub get
 
-      # Build Debug agar log error terlihat jelas jika ada masalah lagi
       - name: Build Debug APK
         run: flutter build apk --debug --no-tree-shake-icons
 
@@ -90,6 +114,6 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           tag: ${{ github.ref_name }}
           name: Release ${{ github.ref_name }}
-          body: "Auto-generated release for Socute APK (Debug Version)."
+          body: "Auto-generated release for Socute APK (Debug + Custom Icon)."
           allowUpdates: true
           makeLatest: true
