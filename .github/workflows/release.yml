@@ -30,27 +30,58 @@ jobs:
 
       - name: Generate Project & Install Dependencies
         run: |
-          # 1. Create a fresh Flutter project
           flutter create . --project-name socute --org com.socute
           flutter config --no-analytics
-          
-          # 2. (CRITICAL FIX) Add required libraries via command line
-          # This ensures they are added to pubspec.yaml before building
           flutter pub add dio archive path_provider device_info_plus permission_handler device_apps
 
-      - name: Inject Permissions into Manifest
+      - name: Overwrite AndroidManifest.xml
         run: |
-          # Inject Android permissions (Internet & Storage) directly into AndroidManifest.xml
-          sed -i 's|<application|<uses-permission android:name="android.permission.INTERNET"/><uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/><uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"/><uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"/><application|g' android/app/src/main/AndroidManifest.xml
+          rm android/app/src/main/AndroidManifest.xml
+          cat <<EOF > android/app/src/main/AndroidManifest.xml
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.socute">
+              <uses-permission android:name="android.permission.INTERNET"/>
+              <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/>
+              <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"/>
+              <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"/>
+              <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES"/>
+              
+              <application
+                  android:label="socute"
+                  android:name="\${applicationName}"
+                  android:icon="@mipmap/ic_launcher">
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true"
+                      android:launchMode="singleTop"
+                      android:theme="@style/LaunchTheme"
+                      android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
+                      android:hardwareAccelerated="true"
+                      android:windowSoftInputMode="adjustResize">
+                      <meta-data
+                        android:name="io.flutter.embedding.android.NormalTheme"
+                        android:resource="@style/NormalTheme"
+                        />
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN"/>
+                          <category android:name="android.intent.category.LAUNCHER"/>
+                      </intent-filter>
+                  </activity>
+                  <meta-data
+                      android:name="flutterEmbedding"
+                      android:value="2" />
+              </application>
+          </manifest>
+          EOF
 
       - name: Install Dart Dependencies
         run: flutter pub get
 
-      - name: Build Release APK
-        run: flutter build apk --release --no-tree-shake-icons
+      # Build Debug agar log error terlihat jelas jika ada masalah lagi
+      - name: Build Debug APK
+        run: flutter build apk --debug --no-tree-shake-icons
 
       - name: Rename APK to socute.apk
-        run: mv build/app/outputs/flutter-apk/app-release.apk build/app/outputs/flutter-apk/socute.apk
+        run: mv build/app/outputs/flutter-apk/app-debug.apk build/app/outputs/flutter-apk/socute.apk
 
       - name: Create Release & Upload APK
         uses: ncipollo/release-action@v1
@@ -59,6 +90,6 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           tag: ${{ github.ref_name }}
           name: Release ${{ github.ref_name }}
-          body: "Auto-generated release for Socute APK."
+          body: "Auto-generated release for Socute APK (Debug Version)."
           allowUpdates: true
           makeLatest: true
