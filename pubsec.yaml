@@ -1,0 +1,40 @@
+name: socute
+description: A GUI wrapper for Frida Inject.
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  
+  # UI Icons (Apple style icons)
+  cupertino_icons: ^1.0.2
+  
+  # To list installed apps & icons
+  device_apps: ^2.2.0
+  
+  # To download binary files
+  dio: ^5.3.2
+  
+  # To extract .xz files (Frida binaries are compressed)
+  archive: ^3.3.7
+  
+  # To detect CPU Architecture (arm64, x86, etc.)
+  device_info_plus: ^9.0.2
+  
+  # To handle storage permissions
+  permission_handler: ^10.4.3
+  
+  # To find internal app directories
+  path_provider: ^2.1.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^2.0.0
+
+flutter:
+  uses-material-design: true

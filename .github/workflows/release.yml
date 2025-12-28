@@ -1,0 +1,63 @@
+name: Build & Release Socute
+
+on:
+  push:
+    tags:
+      - "v*" 
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Setup Java
+        uses: actions/setup-java@v3
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          flutter-version: '3.19.0'
+
+      - name: Generate Android Project Structure
+        run: |
+          flutter create . --project-name socute --org com.socute
+          flutter config --no-analytics
+
+      - name: Inject Permissions into Manifest
+        run: |
+          sed -i 's|<application|<uses-permission android:name="android.permission.INTERNET"/><uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/><uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"/><uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"/><application|g' android/app/src/main/AndroidManifest.xml
+
+      - name: Install Dart Dependencies
+        run: flutter pub get
+
+      - name: Build Release APK
+        run: flutter build apk --release --no-tree-shake-icons
+
+      # --- PERUBAHAN ADA DI SINI (THE CHANGE IS HERE) ---
+      
+      # Step baru: Ganti nama file dari app-release.apk ke socute.apk
+      - name: Rename APK to socute.apk
+        run: mv build/app/outputs/flutter-apk/app-release.apk build/app/outputs/flutter-apk/socute.apk
+
+      # Upload file yang sudah bernama socute.apk
+      - name: Create Release & Upload APK
+        uses: ncipollo/release-action@v1
+        with:
+          # Perhatikan path di bawah ini sudah berubah jadi socute.apk
+          artifacts: "build/app/outputs/flutter-apk/socute.apk"
+          token: ${{ secrets.GITHUB_TOKEN }}
+          tag: ${{ github.ref_name }}
+          name: Release ${{ github.ref_name }}
+          body: "Auto-generated release for Socute APK."
+          allowUpdates: true
+          makeLatest: true
