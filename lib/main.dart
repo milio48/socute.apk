@@ -6,14 +6,10 @@ import 'package:dio/dio.dart';
 import 'package:archive/archive_io.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:device_info_plus/device_info_plus.dart';
-import 'package:permission_handler/permission_handler.dart';
+// Permission handler kita hapus sebagian besar fungsinya karena kita pakai jalur legal
 import 'package:device_apps/device_apps.dart';
 
 void main() {
-  // Catch global Flutter errors
-  FlutterError.onError = (FlutterErrorDetails details) {
-    print("Flutter Error: ${details.exception}");
-  };
   runApp(const MaterialApp(home: SoCuteApp(), debugShowCheckedModeBanner: false));
 }
 
@@ -32,51 +28,43 @@ class _SoCuteAppState extends State<SoCuteApp> {
   bool _useProxy = false;
   final TextEditingController _ipCtrl = TextEditingController(text: "192.168.1.10");
   final TextEditingController _portCtrl = TextEditingController(text: "8080");
-  
-  // URL Controller: Users can edit this manually before downloading
   final TextEditingController _urlCtrl = TextEditingController(); 
 
   List<File> _scriptFiles = [];
   Map<String, bool> _selectedScripts = {}; 
   Process? _runningProcess;
   bool _isRunning = false;
-  final String _baseFolder = "/sdcard/socute-apk";
+  
+  // paths
+  String? _storageDir;  // Android/data/com.socute/files (User visible)
+  String? _internalDir; // /data/user/0/... (Executable safe)
   
   @override
   void initState() {
     super.initState();
-    // SAFE MODE: Wait for the first frame to render to prevent start-up crashes.
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _safeInit();
-    });
+    WidgetsBinding.instance.addPostFrameCallback((_) => _initPaths());
   }
 
-  // --- INITIALIZATION (SAFE MODE) ---
-  Future<void> _safeInit() async {
-    // Delay 1 second to let the UI settle
-    await Future.delayed(const Duration(seconds: 1));
-    _log("[*] System Ready. Checking permissions...");
-    
+  // --- INITIALIZATION (NO PERMISSIONS NEEDED) ---
+  Future<void> _initPaths() async {
     try {
-      // 1. Request Basic Storage Permission (Android 10 and below)
-      await Permission.storage.request();
+      // 1. Dapatkan folder khusus aplikasi di SDCard (User bisa taruh script di sini)
+      // Path: /sdcard/Android/data/com.socute.socute/files/
+      final extDir = await getExternalFilesDir(null);
+      _storageDir = extDir!.path;
       
-      // 2. Request Manage External Storage (Android 11+)
-      if (await Permission.manageExternalStorage.status.isDenied) {
-        try {
-            await Permission.manageExternalStorage.request();
-        } catch (e) {
-            _log("[!] Skipped ManageStorage (Not supported on this Android version)");
-        }
-      }
+      // 2. Dapatkan folder private internal (Untuk eksekusi binary)
+      final intDir = await getApplicationSupportDirectory();
+      _internalDir = intDir.path;
 
-      // 3. Continue initialization
+      _log("[*] Storage: $_storageDir");
+      _log("[*] Internal: $_internalDir");
+      _log("[*] No permissions required for these paths. ✅");
+
       await _detectArchAndSetUrl();
       await _refreshFiles();
-      _log("[OK] Initialization Complete.");
-    } catch (e, stack) {
-      _log("[!!!] CRITICAL ERROR during Init: $e");
-      _log(stack.toString());
+    } catch (e) {
+      _log("[!!!] Init Error: $e");
     }
   }
 
@@ -90,17 +78,9 @@ class _SoCuteAppState extends State<SoCuteApp> {
         else if (abi.contains('x86_64')) arch = 'x86_64';
         else if (abi.contains('x86')) arch = 'x86';
         
-        // Latest version per user request: 17.5.2
-        String ver = "17.5.2"; 
-        
-        // We default to 'android' build for compatibility, but user can change it to 'linux' manually.
-        String defaultUrl = "https://github.com/frida/frida/releases/download/$ver/frida-inject-$ver-android-$arch.xz";
-        
+        String ver = "16.1.4"; 
         setState(() {
-          // Only set if empty so we don't overwrite user's manual input on reload
-          if (_urlCtrl.text.isEmpty) {
-            _urlCtrl.text = defaultUrl;
-          }
+          _urlCtrl.text = "https://github.com/frida/frida/releases/download/$ver/frida-inject-$ver-android-$arch.xz";
         });
     } catch (e) {
         _log("[!] Error Detecting Arch: $e");
@@ -109,19 +89,16 @@ class _SoCuteAppState extends State<SoCuteApp> {
 
   // --- FILE SYSTEM LOGIC ---
   Future<void> _refreshFiles() async {
+    if (_storageDir == null) return;
     try {
-        final dir = Directory("$_baseFolder/scripts");
-        if (!await dir.exists()) {
-          try {
-             await dir.create(recursive: true);
-             _log("Created folder: $_baseFolder/scripts");
-          } catch (e) {
-             _log("[!] Failed to create folder. Permission denied?");
-             return;
-          }
+        // Buat folder scripts di Android/data/.../files/scripts
+        final scriptDir = Directory("$_storageDir/scripts");
+        if (!await scriptDir.exists()) {
+          await scriptDir.create(recursive: true);
+          _log("[*] Created user script folder:\n$_storageDir/scripts");
         }
 
-        List<FileSystemEntity> files = dir.listSync();
+        List<FileSystemEntity> files = scriptDir.listSync();
         setState(() {
           _scriptFiles = files.whereType<File>().where((f) => f.path.endsWith('.js')).toList();
           for (var f in _scriptFiles) {
@@ -131,31 +108,31 @@ class _SoCuteAppState extends State<SoCuteApp> {
           }
         });
     } catch (e) {
-        _log("[!] Error Reading Files: $e");
+        _log("[!] Error Accessing Files: $e");
     }
   }
 
   // --- DOWNLOAD LOGIC ---
   Future<void> _downloadBinary() async {
+    if (_storageDir == null) return;
     try {
       _log("[*] Downloading binary...");
-      if (!mounted) return;
-      var dir = await getApplicationSupportDirectory();
-      String tempPath = "${dir.path}/temp.xz";
       
-      // Download from the URL currently in the text field (User Control)
-      await Dio().download(_urlCtrl.text, tempPath);
+      // Download ke Public Folder dulu (supaya user bisa lihat kalau mau)
+      String downloadPath = "$_storageDir/frida-inject.xz";
+      await Dio().download(_urlCtrl.text, downloadPath);
       _log("[*] Download complete. Extracting...");
 
-      List<int> xzBytes = File(tempPath).readAsBytesSync();
+      List<int> xzBytes = File(downloadPath).readAsBytesSync();
       List<int> tarBytes = XZDecoder().decodeBytes(xzBytes);
       
-      File("$_baseFolder/frida-inject")
-        ..createSync(recursive: true)
+      // Simpan binary asli di folder storage
+      File("$_storageDir/frida-inject")
+        ..createSync()
         ..writeAsBytesSync(tarBytes);
       
-      File(tempPath).deleteSync();
-      _log("[*] Binary saved to $_baseFolder/frida-inject");
+      File(downloadPath).deleteSync();
+      _log("[*] Binary saved to $_storageDir/frida-inject");
       if (!mounted) return;
       setState(() {}); 
     } catch (e) {
@@ -163,16 +140,13 @@ class _SoCuteAppState extends State<SoCuteApp> {
     }
   }
 
-  // --- STOP / KILL LOGIC ---
+  // --- STOP LOGIC ---
   Future<void> _stopAndKill() async {
     if (_targetPackage.isEmpty) return;
     _log("\n[!!!] STOPPING PROCESS...");
     try {
-      // Kill Dart stream
       _runningProcess?.kill();
-      // Kill frida-inject binary
       await Process.run('su', ['-c', 'pkill -f frida-inject']);
-      // Force stop target app
       await Process.run('su', ['-c', 'am force-stop $_targetPackage']);
       _log("[*] Target killed.");
     } catch (e) {
@@ -181,29 +155,32 @@ class _SoCuteAppState extends State<SoCuteApp> {
     setState(() { _isRunning = false; _runningProcess = null; });
   }
 
-  // --- LAUNCH LOGIC ---
+  // --- LAUNCH LOGIC (THE SMART WAY) ---
   Future<void> _launchAndInject() async {
     if (_targetPackage.isEmpty) { _log("[!] Select target app first!"); return; }
     
-    File binaryExternal = File("$_baseFolder/frida-inject");
-    if (!binaryExternal.existsSync()) { _log("[!] Binary not found."); return; }
+    // 1. Ambil binary dari Storage
+    File binarySource = File("$_storageDir/frida-inject");
+    if (!binarySource.existsSync()) { _log("[!] Binary not found. Please download."); return; }
 
     setState(() => _isRunning = true);
 
     try {
       _log("--- STARTING INJECTION ---");
-      // 1. Move binary to internal storage for execution
-      final internalDir = await getApplicationSupportDirectory();
-      final internalBinary = File("${internalDir.path}/frida-bin");
-      await internalBinary.writeAsBytes(await binaryExternal.readAsBytes());
-      await Process.run('chmod', ['755', internalBinary.path]);
+      
+      // 2. COPY ke Internal Private (Wajib agar bisa di-execute oleh Android)
+      // Android modern memblokir eksekusi file langsung dari /sdcard
+      final executable = File("$_internalDir/frida-bin");
+      if (await executable.exists()) await executable.delete();
+      await executable.writeAsBytes(await binarySource.readAsBytes());
+      
+      // 3. CHMOD +x (Sekarang legal karena di internal folder sendiri)
+      await Process.run('chmod', ['755', executable.path]);
 
-      // 2. Prepare Payload
-      final payloadFile = File("$_baseFolder/payload.js");
+      // 4. Siapkan Payload
+      final payloadFile = File("$_internalDir/payload.js");
       var sink = payloadFile.openWrite();
-      if (_useProxy) {
-        sink.writeln(_generateProxyScript(_ipCtrl.text, _portCtrl.text));
-      }
+      if (_useProxy) sink.writeln(_generateProxyScript(_ipCtrl.text, _portCtrl.text));
       _selectedScripts.forEach((path, isSelected) {
         if (isSelected) {
           sink.writeln('\n// FILE: ${path.split('/').last}');
@@ -212,12 +189,14 @@ class _SoCuteAppState extends State<SoCuteApp> {
       });
       await sink.close();
       
-      // 3. Spawn Target
       _log("[*] Spawning $_targetPackage...");
-      String cmd = "${internalBinary.path} -f $_targetPackage -s ${payloadFile.path}";
+      
+      // 5. Jalankan!
+      String cmd = "${executable.path} -f $_targetPackage -s ${payloadFile.path}";
+      
+      // Kita tetap butuh SU untuk attach ke aplikasi lain
       _runningProcess = await Process.start('su', ['-c', cmd]);
       
-      // 4. Listen to logs
       _runningProcess!.stdout.transform(utf8.decoder).listen((data) { _log(data.trim()); });
       _runningProcess!.stderr.transform(utf8.decoder).listen((data) { _log("[ERR] ${data.trim()}"); });
 
@@ -268,85 +247,92 @@ class _SoCuteAppState extends State<SoCuteApp> {
 
   @override
   Widget build(BuildContext context) {
-    bool binaryExists = File("$_baseFolder/frida-inject").existsSync();
+    // Cek keberadaan binary di storage folder
+    bool binaryExists = _storageDir != null && File("$_storageDir/frida-inject").existsSync();
+
     return Scaffold(
       backgroundColor: Colors.grey[900], 
-      appBar: AppBar(title: const Text("SoCute (SafeMode)"), backgroundColor: Colors.black, actions: [IconButton(icon: const Icon(Icons.delete), onPressed: ()=>setState(()=>_logs=""))]),
+      appBar: AppBar(title: const Text("SoCute (Clean Core)"), backgroundColor: Colors.black, actions: [IconButton(icon: const Icon(Icons.delete), onPressed: ()=>setState(()=>_logs=""))]),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(10),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // 1. Target Selector
-            Card(color: Colors.grey[850], child: ListTile(title: Text(_targetName, style: const TextStyle(color: Colors.white)), subtitle: Text(_targetPackage, style: const TextStyle(color: Colors.green)), onTap: _isRunning ? null : _pickApp)),
+            // TARGET
+            Card(
+              color: Colors.grey[850],
+              child: ListTile(
+                title: Text(_targetName, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                subtitle: Text(_targetPackage.isEmpty ? "Tap to select" : _targetPackage, style: const TextStyle(color: Colors.greenAccent)),
+                trailing: const Icon(Icons.touch_app, color: Colors.white),
+                onTap: _isRunning ? null : _pickApp,
+              ),
+            ),
             
-            // 2. Binary Config
+            // BINARY CONFIG
             Card(
               color: Colors.grey[850],
               child: Padding(
                 padding: const EdgeInsets.all(10),
                 child: Column(
                   children: [
-                    // JIKA BINARY SUDAH ADA: Tampilkan status + Tombol Hapus
                     if (binaryExists) 
                       Row(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          const Text("Binary Ready (v16.1.4) ✅", style: TextStyle(color: Colors.green, fontWeight: FontWeight.bold)),
+                          const Text("Binary Ready ✅", style: TextStyle(color: Colors.green, fontWeight: FontWeight.bold)),
                           const SizedBox(width: 10),
                           IconButton(
                             icon: const Icon(Icons.delete_forever, color: Colors.red),
-                            tooltip: "Delete & Change Version",
                             onPressed: () {
-                              // Hapus file binary agar user bisa download ulang / ganti versi
-                              try {
-                                File("$_baseFolder/frida-inject").deleteSync();
-                                setState(() {}); // Refresh UI agar TextField muncul lagi
-                              } catch (e) {
-                                _log("[!] Failed to delete: $e");
-                              }
+                              try { File("$_storageDir/frida-inject").deleteSync(); setState(() {}); } catch (e) { _log("[!] Failed: $e"); }
                             },
                           )
                         ],
                       ),
-
-                    // JIKA BINARY BELUM ADA: Tampilkan Kolom URL (Bisa Edit) + Tombol Download
                     if (!binaryExists) ...[
                       const Text("Binary Missing ❌", style: TextStyle(color: Colors.red)),
-                      TextField(
-                        controller: _urlCtrl, 
-                        style: const TextStyle(color: Colors.white, fontSize: 12), 
-                        decoration: const InputDecoration(
-                          labelText: "Frida Binary URL (Editable)",
-                          labelStyle: TextStyle(color: Colors.grey),
-                          helperText: "You can change the version manually (e.g. 16.2.1)",
-                          helperStyle: TextStyle(color: Colors.white30)
-                        )
-                      ),
-                      const SizedBox(height: 5),
-                      ElevatedButton.icon(
-                        icon: const Icon(Icons.download),
-                        label: const Text("Download & Install"),
-                        onPressed: _downloadBinary, 
-                      )
+                      TextField(controller: _urlCtrl, style: const TextStyle(color: Colors.white, fontSize: 12), decoration: const InputDecoration(labelText: "URL", labelStyle: TextStyle(color: Colors.grey))),
+                      ElevatedButton(onPressed: _downloadBinary, child: const Text("Download"))
                     ]
                   ],
                 ),
               ),
             ),
-            
-            // 3. Options
-            ExpansionTile(title: const Text("Options", style: TextStyle(color: Colors.white)), children: [
+
+            // OPTIONS
+            ExpansionTile(
+              title: const Text("Inject Options", style: TextStyle(color: Colors.white)),
+              initiallyExpanded: true,
+              children: [
                 CheckboxListTile(title: const Text("Proxy", style: TextStyle(color: Colors.white)), value: _useProxy, onChanged: _isRunning ? null : (v) => setState(() => _useProxy = v!)),
-                if(_useProxy) Row(children: [Expanded(child: TextField(controller: _ipCtrl, style: const TextStyle(color: Colors.white))), const SizedBox(width:10), Expanded(child: TextField(controller: _portCtrl, style: const TextStyle(color: Colors.white)))]),
+                if (_useProxy) Row(children: [Expanded(child: TextField(controller: _ipCtrl, style: const TextStyle(color: Colors.white))), const SizedBox(width: 10), Expanded(child: TextField(controller: _portCtrl, style: const TextStyle(color: Colors.white)))]),
+                
+                const Divider(),
+                // SCRIPT LOCATION INFO
+                Padding(
+                  padding: const EdgeInsets.all(8.0),
+                  child: Text("Put .js scripts in:\nAndroid/data/com.socute.socute/files/scripts/", 
+                    style: TextStyle(color: Colors.orangeAccent, fontSize: 12, fontStyle: FontStyle.italic), textAlign: TextAlign.center),
+                ),
                 IconButton(icon: const Icon(Icons.refresh, color: Colors.white), onPressed: _refreshFiles),
-                ..._scriptFiles.map((f) => CheckboxListTile(title: Text(f.path.split('/').last, style: const TextStyle(color: Colors.white)), value: _selectedScripts[f.path], onChanged: (v) => setState(() => _selectedScripts[f.path] = v!))).toList()
-            ]),
-            
-            // 4. Launch Button
-            ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: _isRunning ? Colors.red : Colors.green), onPressed: _isRunning ? _stopAndKill : _launchAndInject, child: Text(_isRunning ? "STOP" : "LAUNCH")),
-            
-            // 5. Logs
+                ..._scriptFiles.map((f) => CheckboxListTile(
+                  title: Text(f.path.split('/').last, style: const TextStyle(color: Colors.white)),
+                  value: _selectedScripts[f.path],
+                  onChanged: _isRunning ? null : (v) => setState(() => _selectedScripts[f.path] = v!),
+                  dense: true,
+                )).toList(),
+              ],
+            ),
+
+            const SizedBox(height: 10),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(backgroundColor: _isRunning ? Colors.redAccent : Colors.greenAccent, padding: const EdgeInsets.symmetric(vertical: 15)),
+              onPressed: _isRunning ? _stopAndKill : _launchAndInject,
+              child: Text(_isRunning ? "STOP" : "LAUNCH", style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+            ),
+
+            const SizedBox(height: 10),
             Container(height: 200, padding: const EdgeInsets.all(5), color: Colors.black, child: SingleChildScrollView(reverse: true, child: Text(_logs, style: const TextStyle(color: Colors.green, fontFamily: 'monospace'))))
           ],
         ),
