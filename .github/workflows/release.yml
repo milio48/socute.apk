@@ -1,4 +1,4 @@
-name: Build & Release Socute (Python fix)
+name: Build & Release Socute (Clean Native)
 
 on:
   push:
@@ -30,14 +30,15 @@ jobs:
 
       - name: Generate Project & Install Dependencies
         run: |
-          # 1. Create project
+          # Create project
           flutter create . --project-name socute --org com.socute
           flutter config --no-analytics
           
-          # 2. Install dependencies
-          flutter pub add dio archive path_provider device_info_plus permission_handler device_apps flutter_launcher_icons
+          # Install ONLY required libraries
+          # Removed: permission_handler (We don't use it anymore in Dart code!)
+          flutter pub add dio archive path_provider device_info_plus device_apps flutter_launcher_icons
 
-      # --- GENERATE ICON (Using Python for safety) ---
+      # --- GENERATE ICON ---
       - name: Generate App Icon
         run: |
           python3 -c "
@@ -57,36 +58,29 @@ jobs:
                   f.write(config.strip())
               subprocess.run(['flutter', 'pub', 'run', 'flutter_launcher_icons'], check=True)
           else:
-              print('No icon.png found. Skipping.')
+              print('No icon.png found. Using default Flutter logo.')
           "
 
-      # --- PERMISSION FIX (PYTHON METHOD - BULLETPROOF) ---
-      - name: Force Overwrite AndroidManifest.xml
+      # --- MANIFEST CLEANUP (Hanya Izin Wajib) ---
+      - name: Overwrite AndroidManifest.xml
         run: |
           python3 -c "
           import os
           
-          # Path ke Manifest
           manifest_path = 'android/app/src/main/AndroidManifest.xml'
-          
-          # Hapus file lama jika ada
           if os.path.exists(manifest_path):
               os.remove(manifest_path)
           
-          # Isi Manifest Baru (Lengkap dengan Izin & Legacy Storage)
-          # Perhatikan package name: com.socute.socute (sesuai hasil flutter create)
+          # Manifest Bersih: Tanpa Storage Permissions yang aneh-aneh.
+          # Hanya butuh Internet & Query Packages.
           manifest_content = \"\"\"<manifest xmlns:android='http://schemas.android.com/apk/res/android' package='com.socute.socute'>
               <uses-permission android:name='android.permission.INTERNET'/>
-              <uses-permission android:name='android.permission.READ_EXTERNAL_STORAGE'/>
-              <uses-permission android:name='android.permission.WRITE_EXTERNAL_STORAGE'/>
-              <uses-permission android:name='android.permission.MANAGE_EXTERNAL_STORAGE'/>
               <uses-permission android:name='android.permission.QUERY_ALL_PACKAGES'/>
               
               <application
                   android:label='SoCute'
                   android:name='\${applicationName}'
-                  android:icon='@mipmap/ic_launcher'
-                  android:requestLegacyExternalStorage='true'>
+                  android:icon='@mipmap/ic_launcher'>
                   <activity
                       android:name='.MainActivity'
                       android:exported='true'
@@ -110,41 +104,38 @@ jobs:
               </application>
           </manifest>\"\"\"
           
-          # Tulis file baru
           with open(manifest_path, 'w') as f:
               f.write(manifest_content)
-          
-          print('✅ AndroidManifest.xml has been successfully overwritten with PERMISSIONS!')
+          print('✅ Manifest Cleaned (Native Storage Mode)')
           "
 
       - name: Install Dart Dependencies
         run: flutter pub get
 
-      # --- BUILD DUAL APK ---
-      - name: Build Debug APK
-        run: flutter build apk --debug --no-tree-shake-icons
-
-      - name: Rename Debug APK
-        run: mv build/app/outputs/flutter-apk/app-debug.apk build/app/outputs/flutter-apk/socute-debug.apk
-
+      # --- BUILD SINGLE RELEASE APK ---
+      # Kita cukup build Release saja karena code ini stabil tanpa log debug berat
       - name: Build Release APK
         run: flutter build apk --release --no-tree-shake-icons
 
-      - name: Rename Release APK
-        run: mv build/app/outputs/flutter-apk/app-release.apk build/app/outputs/flutter-apk/socute-release.apk
+      - name: Rename APK
+        run: mv build/app/outputs/flutter-apk/app-release.apk build/app/outputs/flutter-apk/socute.apk
 
-      - name: Create Release & Upload ALL APKs
+      - name: Create Release & Upload APK
         uses: ncipollo/release-action@v1
         with:
-          artifacts: "build/app/outputs/flutter-apk/socute-debug.apk,build/app/outputs/flutter-apk/socute-release.apk"
+          artifacts: "build/app/outputs/flutter-apk/socute.apk"
           token: ${{ secrets.GITHUB_TOKEN }}
           tag: ${{ github.ref_name }}
           name: Release ${{ github.ref_name }}
           body: |
-            Fix Permission (Python Method).
+            **SoCute v${{ github.ref_name }} (Native Core)**
             
-            📂 **Files:**
-            - `socute-release.apk` : Lightweight version.
-            - `socute-debug.apk` : Debug logs version.
+            ✅ **Changes:**
+            - Removed Permission Dependency (No more 'Permission Denied' errors!).
+            - Using Native Android Storage (`Android/data/...`).
+            - Support Android 10, 11, 12, 13, 14+.
+            
+            📂 **How to use Scripts:**
+            Put your `.js` files in: `/sdcard/Android/data/com.socute.socute/files/scripts/`
           allowUpdates: true
           makeLatest: true
