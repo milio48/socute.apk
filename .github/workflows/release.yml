@@ -139,3 +139,4 @@ jobs:
             Put your `.js` files in: `/sdcard/Android/data/com.socute.socute/files/scripts/`
           allowUpdates: true
           makeLatest: true
+          removeArtifacts: true
