@@ -1,14 +1,3 @@
-Maaf, itu kesalahan saya! 🤦‍♂️
-
-Saya tidak sengaja menggunakan nama fungsi **Native Android (Java/Kotlin)** yaitu `getExternalFilesDir`, padahal di **Flutter (Dart)** nama fungsinya adalah `getExternalStorageDirectory`.
-
-Karena Flutter adalah "jembatan", kita harus menggunakan nama fungsi yang disediakan oleh plugin `path_provider`.
-
-### 🛠️ Perbaikan: Update `lib/main.dart`
-
-Silakan ganti **TOTAL** isi file `lib/main.dart` dengan kode di bawah ini. Saya sudah memperbaiki baris 53 yang error tersebut.
-
-```dart
 import 'dart:io';
 import 'dart:convert';
 import 'dart:async';
@@ -17,6 +6,7 @@ import 'package:dio/dio.dart';
 import 'package:archive/archive_io.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:device_info_plus/device_info_plus.dart';
+// We removed most permission_handler usage as we rely on native paths
 import 'package:device_apps/device_apps.dart';
 
 void main() {
@@ -60,9 +50,7 @@ class _SoCuteAppState extends State<SoCuteApp> {
     try {
       // 1. Get external app-specific folder (User can access this via File Manager)
       // Path: /sdcard/Android/data/com.socute.socute/files/
-      
-      // FIXED HERE: Changed 'getExternalFilesDir' to 'getExternalStorageDirectory'
-      final extDir = await getExternalStorageDirectory(); 
+      final extDir = await getExternalFilesDir(null);
       _storageDir = extDir!.path;
       
       // 2. Get internal private folder (For binary execution)
@@ -352,5 +340,3 @@ class _SoCuteAppState extends State<SoCuteApp> {
     );
   }
 }
-
-```
