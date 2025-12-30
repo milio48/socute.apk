@@ -7,6 +7,7 @@ import 'package:archive/archive_io.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:device_apps/device_apps.dart';
+import 'package:flutter/services.dart';
 
 // --- MAIN ENTRY POINT ---
 void main() {
@@ -400,13 +401,42 @@ class _LauncherPageState extends State<LauncherPage> {
 
             // 5. LOGS
             const SizedBox(height: 10),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text("Execution Logs:", style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold)),
+                Row(
+                  children: [
+                    // Tombol Copy
+                    IconButton(
+                      icon: const Icon(Icons.copy, color: Colors.blue, size: 20),
+                      tooltip: "Copy Logs",
+                      onPressed: () {
+                        Clipboard.setData(ClipboardData(text: _logs));
+                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Logs copied to clipboard!", style: TextStyle(color: Colors.white)), backgroundColor: Colors.blue));
+                      },
+                    ),
+                    // Tombol Clear
+                    IconButton(
+                      icon: const Icon(Icons.delete_sweep, color: Colors.red, size: 20),
+                      tooltip: "Clear Logs",
+                      onPressed: () => setState(() => _logs = ""),
+                    ),
+                  ],
+                )
+              ],
+            ),
             Container(
-              height: 120,
+              height: 150,
+              width: double.infinity,
               padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(color: Colors.black, border: Border.all(color: Colors.white24)),
+              decoration: BoxDecoration(color: Colors.black, border: Border.all(color: Colors.white24), borderRadius: BorderRadius.circular(5)),
               child: SingleChildScrollView(
                 reverse: true,
-                child: Text(_logs, style: const TextStyle(color: Colors.greenAccent, fontFamily: 'monospace', fontSize: 11)),
+                child: SelectableText( 
+                  _logs, 
+                  style: const TextStyle(color: Colors.greenAccent, fontFamily: 'monospace', fontSize: 11)
+                ),
               ),
             )
           ],
