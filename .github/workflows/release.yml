@@ -1,4 +1,4 @@
-name: Build & Release SoCute v2.0
+name: Build & Release SoCute v2.0 (Fix Icon)
 
 on:
   push:
@@ -34,10 +34,9 @@ jobs:
           flutter create . --project-name socute --org com.socute
           flutter config --no-analytics
           
-          # 2. Install Dependencies (UPDATED FOR v2.0)
-          # Added: file_picker (For Script Manager)
-          # Removed: permission_handler (Not needed anymore)
-          flutter pub add dio archive path_provider device_info_plus device_apps file_picker
+          # 2. Install Dependencies (FIXED)
+          # Added back: flutter_launcher_icons (Required for icon generation step)
+          flutter pub add dio archive path_provider device_info_plus device_apps file_picker flutter_launcher_icons
 
       # --- GENERATE ICON ---
       - name: Generate App Icon
@@ -73,10 +72,6 @@ jobs:
               os.remove(manifest_path)
           
           # Manifest for v2.0
-          # - INTERNET: For downloading binaries
-          # - QUERY_ALL_PACKAGES: To list installed apps for target selection
-          # - NO STORAGE PERMISSIONS: We use app-specific scoped storage
-          
           manifest_content = \"\"\"<manifest xmlns:android='http://schemas.android.com/apk/res/android' package='com.socute.socute'>
               <uses-permission android:name='android.permission.INTERNET'/>
               <uses-permission android:name='android.permission.QUERY_ALL_PACKAGES'/>
