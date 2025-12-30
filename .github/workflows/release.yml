@@ -1,4 +1,4 @@
-name: Build & Release Socute (Clean Native)
+name: Build & Release SoCute v2.0
 
 on:
   push:
@@ -30,13 +30,14 @@ jobs:
 
       - name: Generate Project & Install Dependencies
         run: |
-          # Create project
+          # 1. Create project structure
           flutter create . --project-name socute --org com.socute
           flutter config --no-analytics
           
-          # Install ONLY required libraries
-          # Removed: permission_handler (We don't use it anymore in Dart code!)
-          flutter pub add dio archive path_provider device_info_plus device_apps flutter_launcher_icons
+          # 2. Install Dependencies (UPDATED FOR v2.0)
+          # Added: file_picker (For Script Manager)
+          # Removed: permission_handler (Not needed anymore)
+          flutter pub add dio archive path_provider device_info_plus device_apps file_picker
 
       # --- GENERATE ICON ---
       - name: Generate App Icon
@@ -61,8 +62,8 @@ jobs:
               print('No icon.png found. Using default Flutter logo.')
           "
 
-      # --- MANIFEST CLEANUP (Hanya Izin Wajib) ---
-      - name: Overwrite AndroidManifest.xml
+      # --- MANIFEST UPDATE (Clean Native Mode) ---
+      - name: Update AndroidManifest.xml
         run: |
           python3 -c "
           import os
@@ -71,8 +72,11 @@ jobs:
           if os.path.exists(manifest_path):
               os.remove(manifest_path)
           
-          # Manifest Bersih: Tanpa Storage Permissions yang aneh-aneh.
-          # Hanya butuh Internet & Query Packages.
+          # Manifest for v2.0
+          # - INTERNET: For downloading binaries
+          # - QUERY_ALL_PACKAGES: To list installed apps for target selection
+          # - NO STORAGE PERMISSIONS: We use app-specific scoped storage
+          
           manifest_content = \"\"\"<manifest xmlns:android='http://schemas.android.com/apk/res/android' package='com.socute.socute'>
               <uses-permission android:name='android.permission.INTERNET'/>
               <uses-permission android:name='android.permission.QUERY_ALL_PACKAGES'/>
@@ -106,37 +110,36 @@ jobs:
           
           with open(manifest_path, 'w') as f:
               f.write(manifest_content)
-          print('✅ Manifest Cleaned (Native Storage Mode)')
+          print('✅ AndroidManifest.xml updated for v2.0')
           "
 
       - name: Install Dart Dependencies
         run: flutter pub get
 
-      # --- BUILD SINGLE RELEASE APK ---
-      # Kita cukup build Release saja karena code ini stabil tanpa log debug berat
+      # --- BUILD RELEASE ---
       - name: Build Release APK
         run: flutter build apk --release --no-tree-shake-icons
 
       - name: Rename APK
-        run: mv build/app/outputs/flutter-apk/app-release.apk build/app/outputs/flutter-apk/socute.apk
+        run: mv build/app/outputs/flutter-apk/app-release.apk build/app/outputs/flutter-apk/socute-v2.apk
 
       - name: Create Release & Upload APK
         uses: ncipollo/release-action@v1
         with:
-          artifacts: "build/app/outputs/flutter-apk/socute.apk"
+          artifacts: "build/app/outputs/flutter-apk/socute-v2.apk"
           token: ${{ secrets.GITHUB_TOKEN }}
           tag: ${{ github.ref_name }}
-          name: Release ${{ github.ref_name }}
+          name: SoCute ${{ github.ref_name }} (Major Update)
           body: |
-            **SoCute v${{ github.ref_name }} (Native Core)**
+            **SoCute v2.0 (The Architect Update)**
             
-            ✅ **Changes:**
-            - Removed Permission Dependency (No more 'Permission Denied' errors!).
-            - Using Native Android Storage (`Android/data/...`).
-            - Support Android 10, 11, 12, 13, 14+.
+            🚀 **New Features:**
+            - **Script Manager:** Import, delete, and drag-to-reorder `.js` scripts.
+            - **Smart Downloader:** Choose Architecture (`arm64`/`arm`) manually to fix compatibility.
+            - **Anti-Crash Mode:** Option to disable SELinux (`setenforce 0`) for stubborn ROMs.
+            - **Native Storage:** No permission errors on Android 14.
             
-            📂 **How to use Scripts:**
-            Put your `.js` files in: `/sdcard/Android/data/com.socute.socute/files/scripts/`
+            ⚠️ **Note:** If the app crashes on launch, try enabling "Disable SELinux" in the config menu.
           allowUpdates: true
           makeLatest: true
           removeArtifacts: true
