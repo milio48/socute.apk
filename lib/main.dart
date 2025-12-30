@@ -7,49 +7,57 @@ import 'package:archive/archive_io.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:device_apps/device_apps.dart';
-import 'package:file_picker/file_picker.dart';
 
+// --- MAIN ENTRY POINT ---
 void main() {
   runApp(const MaterialApp(
-    home: SoCuteApp(),
-    debugShowCheckedModeBanner: false,
     title: "SoCute Injector",
+    debugShowCheckedModeBanner: false,
+    home: LauncherPage(),
   ));
 }
 
-class SoCuteApp extends StatefulWidget {
-  const SoCuteApp({super.key});
-  @override
-  State<SoCuteApp> createState() => _SoCuteAppState();
+// --- HELPER CLASS FOR PAYLOAD COMPOSER ---
+class ScriptItem {
+  File file;
+  bool isChecked;
+  ScriptItem({required this.file, this.isChecked = true});
 }
 
-class _SoCuteAppState extends State<SoCuteApp> {
-  // --- CORE STATE ---
-  String _logs = "Initializing SoCute Core...\n";
+// ==========================================
+// PAGE 1: LAUNCHER (THE COCKPIT)
+// ==========================================
+class LauncherPage extends StatefulWidget {
+  const LauncherPage({super.key});
+  @override
+  State<LauncherPage> createState() => _LauncherPageState();
+}
+
+class _LauncherPageState extends State<LauncherPage> {
+  // Logs & Process
+  String _logs = "Initializing SoCute v2.2...\n";
   bool _isRunning = false;
   Process? _runningProcess;
 
-  // --- TARGET CONFIG ---
+  // Target
   String _targetPackage = "";
-  String _targetName = "No Target Selected";
+  String _targetName = "Select Target App";
 
-  // --- INJECTION CONFIG ---
-  bool _disableSELinux = false; // Toggle for "Anti-Crash"
+  // Configuration
+  bool _disableSELinux = false; // Anti-Crash
   bool _useProxy = false;
   final TextEditingController _ipCtrl = TextEditingController(text: "192.168.1.10");
   final TextEditingController _portCtrl = TextEditingController(text: "8080");
 
-  // --- DOWNLOADER CONFIG ---
-  final TextEditingController _fridaVersionCtrl = TextEditingController(text: "16.2.5");
-  String _selectedArch = "arm64"; // Default for modern phones
+  // Downloader Config
+  final TextEditingController _fridaVersionCtrl = TextEditingController(text: "17.5.2");
+  String _selectedArch = "arm64"; 
   final List<String> _archOptions = ["arm64", "arm", "x86", "x86_64"];
 
-  // --- SCRIPT MANAGER STATE ---
-  List<File> _scriptFiles = []; // The list of scripts to merge
-  
-  // --- PATHS ---
-  String? _storageDir;  // Public: /sdcard/Android/data/com.socute.socute/files
-  String? _internalDir; // Private: /data/user/0/com.socute.socute/files
+  // Script Data
+  List<ScriptItem> _scriptItems = [];
+  String? _storageDir;  // Public
+  String? _internalDir; // Private Executable
 
   @override
   void initState() {
@@ -57,213 +65,147 @@ class _SoCuteAppState extends State<SoCuteApp> {
     WidgetsBinding.instance.addPostFrameCallback((_) => _initSystem());
   }
 
-  /// 1. SYSTEM INITIALIZATION
-  /// Sets up folders and detects device architecture automatically.
+  // 1. SYSTEM INIT
   Future<void> _initSystem() async {
     try {
-      // Setup Paths (Native Android 14 Way - No Permissions needed)
+      // Paths
       final extDir = await getExternalStorageDirectory();
       final intDir = await getApplicationSupportDirectory();
-      
       _storageDir = extDir!.path;
       _internalDir = intDir.path;
 
-      // Create scripts folder if not exists
+      // Create folder
       await Directory("$_storageDir/scripts").create(recursive: true);
 
-      _log("[*] System Ready.");
-      _log("[*] Script Folder: $_storageDir/scripts");
-
-      // Smart Architecture Detection
+      // Auto Detect Arch
       var androidInfo = await DeviceInfoPlugin().androidInfo;
       var abi = androidInfo.supportedAbis[0].toLowerCase();
       
-      String detectedArch = "arm64";
-      if (abi.contains("arm64") || abi.contains("aarch64")) {
-        detectedArch = "arm64";
-      } else if (abi.contains("arm")) {
-        detectedArch = "arm";
-      } else if (abi.contains("x86_64")) {
-        detectedArch = "x86_64";
-      } else if (abi.contains("x86")) {
-        detectedArch = "x86";
-      }
+      String detected = "arm64";
+      if (abi.contains("arm") && !abi.contains("64")) detected = "arm";
+      else if (abi.contains("x86_64")) detected = "x86_64";
+      else if (abi.contains("x86")) detected = "x86";
 
-      setState(() {
-        _selectedArch = detectedArch;
-      });
-      _log("[*] Auto-detected Arch: $detectedArch");
+      setState(() => _selectedArch = detected);
+      _log("[*] System Ready. Arch: $detected");
 
-      // Load existing scripts
       await _refreshScripts();
 
     } catch (e) {
-      _log("[!] Init Failed: $e");
+      _log("[!] Init Error: $e");
     }
   }
 
-  /// 2. SCRIPT MANAGER LOGIC
-  /// Loads .js files from the public folder.
+  // 2. REFRESH SCRIPTS (Preserve Selection Logic)
   Future<void> _refreshScripts() async {
     if (_storageDir == null) return;
     try {
       final scriptDir = Directory("$_storageDir/scripts");
       List<FileSystemEntity> files = scriptDir.listSync();
-      
+      var jsFiles = files.whereType<File>().where((f) => f.path.endsWith('.js')).toList();
+
+      // Sort alphabetically first
+      jsFiles.sort((a, b) => a.path.compareTo(b.path));
+
       setState(() {
-        // Filter only .js files
-        var newFiles = files.whereType<File>().where((f) => f.path.endsWith('.js')).toList();
-        
-        // Strategy: We keep existing order if possible, append new ones.
-        // For this version, we just reload. The user reorders in the UI.
-        if (_scriptFiles.isEmpty) {
-          _scriptFiles = newFiles;
-        } else {
-          // Simple refresh (resetting order for now, persistent order needs DB/JSON)
-           _scriptFiles = newFiles;
-        }
+        // We create new items but try to preserve 'isChecked' state if file existed before
+        Set<String> previouslyChecked = _scriptItems
+            .where((i) => i.isChecked)
+            .map((i) => i.file.path)
+            .toSet();
+
+        _scriptItems = jsFiles.map((f) {
+          // If it was checked before (or list was empty meaning first load), keep it checked
+          bool shouldCheck = previouslyChecked.contains(f.path) || _scriptItems.isEmpty;
+          return ScriptItem(file: f, isChecked: shouldCheck);
+        }).toList();
       });
     } catch (e) {
-      _log("[!] Error loading scripts: $e");
+      _log("[!] Load Scripts Error: $e");
     }
   }
 
-  Future<void> _importScript() async {
-    try {
-      FilePickerResult? result = await FilePicker.platform.pickFiles(
-        type: FileType.custom,
-        allowedExtensions: ['js'],
-      );
-
-      if (result != null) {
-        File source = File(result.files.single.path!);
-        String destPath = "$_storageDir/scripts/${result.files.single.name}";
-        await source.copy(destPath);
-        _log("[*] Imported: ${result.files.single.name}");
-        await _refreshScripts();
-      }
-    } catch (e) {
-      _log("[!] Import Failed: $e");
-    }
-  }
-
-  void _deleteScript(File f) {
-    try {
-      f.deleteSync();
-      _refreshScripts();
-      _log("[*] Deleted: ${f.path.split('/').last}");
-    } catch (e) {
-      _log("[!] Delete failed: $e");
-    }
-  }
-
-  /// 3. DOWNLOADER LOGIC
-  /// Downloads, extracts xz, and prepares the binary.
+  // 3. DOWNLOADER LOGIC
   Future<void> _downloadBinary(BuildContext ctx) async {
     if (_storageDir == null) return;
+    Navigator.pop(ctx);
+    
     try {
-      Navigator.pop(ctx); // Close dialog
-      _log("[*] Starting Download...");
-      
+      _log("[*] Downloading Frida...");
       String ver = _fridaVersionCtrl.text;
-      String arch = _selectedArch;
-      String filename = "frida-inject-$ver-android-$arch.xz";
-      String url = "https://github.com/frida/frida/releases/download/$ver/$filename";
+      String url = "https://github.com/frida/frida/releases/download/$ver/frida-inject-$ver-android-$_selectedArch.xz";
       
-      _log(" -> URL: $url");
-
       String tempPath = "$_storageDir/temp.xz";
+      await Dio().download(url, tempPath);
       
-      // Download
-      await Dio().download(url, tempPath, onReceiveProgress: (rec, total) {
-        // Optional: Implement progress bar here if needed
-      });
-      _log("[*] Downloaded. Extracting...");
-
-      // Extract .xz
       List<int> xzBytes = File(tempPath).readAsBytesSync();
       List<int> tarBytes = XZDecoder().decodeBytes(xzBytes);
       
-      // Save as standard name 'frida-inject'
       File("$_storageDir/frida-inject")
         ..createSync()
         ..writeAsBytesSync(tarBytes);
       
-      // Cleanup
       File(tempPath).deleteSync();
-      
-      _log("[OK] Binary Ready! (Version: $ver | Arch: $arch)");
-      setState(() {}); // Refresh UI to show "Ready"
-      
+      _log("[OK] Binary $_selectedArch ($ver) Installed!");
+      setState(() {});
     } catch (e) {
-      _log("[!] Download Error: $e");
-      _log("Tip: Check version number or internet connection.");
+      _log("[!] Download Failed: $e");
     }
   }
 
-  /// 4. LAUNCHER LOGIC
-  /// The robust launch sequence with SELinux handling.
+  // 4. LAUNCH SEQUENCE (THE ENGINE)
   Future<void> _launchSequence() async {
-    if (_targetPackage.isEmpty) { _log("[!] Select a target app first!"); return; }
-    
-    File binarySource = File("$_storageDir/frida-inject");
-    if (!binarySource.existsSync()) { _log("[!] Binary missing. Please download it first."); return; }
+    if (_targetPackage.isEmpty) { _log("[!] Select target app first!"); return; }
+    File binary = File("$_storageDir/frida-inject");
+    if (!binary.existsSync()) { _log("[!] Binary missing. Download first."); return; }
 
     setState(() => _isRunning = true);
-    _log("\n=== STARTING INJECTION SEQUENCE ===");
+    _log("\n=== STARTING INJECTION ===");
 
     try {
-      // Step A: Handle SELinux (Anti-Crash)
+      // A. Anti-Crash (SELinux)
       if (_disableSELinux) {
-        _log("[*] Disabling SELinux (Anti-Crash Mode)...");
         await Process.run('su', ['-c', 'setenforce 0']);
-      } else {
-        _log("[*] Keeping SELinux Enforcing (Standard Mode).");
+        _log("[*] SELinux Disabled (Permissive).");
       }
 
-      // Step B: Prepare Binary in Internal Storage (Executable Zone)
-      final executable = File("$_internalDir/frida-bin");
+      // B. Prepare Executable
+      File executable = File("$_internalDir/frida-bin");
       if (await executable.exists()) await executable.delete();
-      
-      _log("[*] Copying binary to internal execution sandbox...");
-      await executable.writeAsBytes(await binarySource.readAsBytes());
-      
-      // Step C: Permission Fix
+      await executable.writeAsBytes(await binary.readAsBytes());
       await Process.run('chmod', ['755', executable.path]);
 
-      // Step D: Merge Scripts & Proxy Config
-      _log("[*] Merging ${_scriptFiles.length} scripts...");
-      final payloadFile = File("$_internalDir/payload.js");
-      var sink = payloadFile.openWrite();
-      
-      // Inject Proxy Config first if enabled
+      // C. MERGER LOGIC (Proxy First -> Selected Scripts)
+      File payload = File("$_internalDir/payload.js");
+      var sink = payload.openWrite();
+
+      // 1. Proxy
       if (_useProxy) {
-        sink.writeln(_generateProxyScript(_ipCtrl.text, _portCtrl.text));
-        _log("[+] Proxy config injected.");
+        String ip = _ipCtrl.text;
+        String port = _portCtrl.text;
+        sink.writeln("Java.perform(function() { var S = Java.use('java.lang.System'); S.setProperty('http.proxyHost','$ip'); S.setProperty('http.proxyPort','$port'); S.setProperty('https.proxyHost','$ip'); S.setProperty('https.proxyPort','$port'); console.log('[+] Proxy injected: $ip:$port'); });");
+        _log("[+] Proxy Config injected.");
       }
 
-      // Merge user scripts in order
-      for (var f in _scriptFiles) {
-        sink.writeln('\n// --- START FILE: ${f.path.split('/').last} ---');
-        sink.writeln(f.readAsStringSync());
-        sink.writeln('// --- END FILE ---');
+      // 2. User Scripts
+      int count = 0;
+      for (var item in _scriptItems) {
+        if (item.isChecked) {
+          sink.writeln('\n// --- FILE: ${item.file.path.split('/').last} ---');
+          sink.writeln(item.file.readAsStringSync());
+          count++;
+        }
       }
       await sink.close();
+      _log("[*] Merged $count scripts into payload.");
 
-      // Step E: EXECUTE
-      _log("[*] Spawning target: $_targetPackage");
-      String cmd = "${executable.path} -f $_targetPackage -s ${payloadFile.path}";
-      
-      // Run with SU
+      // D. EXECUTE
+      _log("[*] Spawning $_targetPackage...");
+      String cmd = "${executable.path} -f $_targetPackage -s ${payload.path}";
       _runningProcess = await Process.start('su', ['-c', cmd]);
-      
-      // Stream logs
-      _runningProcess!.stdout.transform(utf8.decoder).listen((data) { 
-        _log(data.trim()); 
-      });
-      _runningProcess!.stderr.transform(utf8.decoder).listen((data) { 
-        _log("[ERR] ${data.trim()}"); 
-      });
+
+      _runningProcess!.stdout.transform(utf8.decoder).listen((d) => _log(d.trim()));
+      _runningProcess!.stderr.transform(utf8.decoder).listen((d) => _log("[ERR] ${d.trim()}"));
 
     } catch (e) {
       _log("[!!!] LAUNCH FAILED: $e");
@@ -272,21 +214,10 @@ class _SoCuteAppState extends State<SoCuteApp> {
   }
 
   Future<void> _stopSequence() async {
-    if (_runningProcess != null) {
-      _runningProcess!.kill();
-    }
-    // Force kill via shell to be sure
+    _runningProcess?.kill();
     await Process.run('su', ['-c', 'pkill -f frida-inject']);
-    
-    setState(() {
-      _isRunning = false; 
-      _runningProcess = null;
-    });
-    _log("[*] Process Stopped.");
-  }
-
-  String _generateProxyScript(String ip, String port) {
-    return "Java.perform(function() { console.log('[+] Setting Proxy to $ip:$port'); var S = Java.use('java.lang.System'); S.setProperty('http.proxyHost','$ip'); S.setProperty('http.proxyPort','$port'); S.setProperty('https.proxyHost','$ip'); S.setProperty('https.proxyPort','$port'); });";
+    setState(() { _isRunning = false; _runningProcess = null; });
+    _log("[*] Process Killed.");
   }
 
   void _log(String text) {
@@ -296,117 +227,69 @@ class _SoCuteAppState extends State<SoCuteApp> {
 
   // --- UI COMPONENTS ---
 
-  void _showAppPicker() async {
-    try {
-      List<Application> apps = await DeviceApps.getInstalledApplications(includeAppIcons: true);
-      showDialog(context: context, builder: (ctx) => AlertDialog(
-        title: const Text("Select Target"),
-        content: SizedBox(width: double.maxFinite, height: 400, child: ListView.builder(
-          itemCount: apps.length,
-          itemBuilder: (c, i) => ListTile(
-            leading: apps[i] is ApplicationWithIcon ? Image.memory((apps[i] as ApplicationWithIcon).icon, width: 32) : null,
-            title: Text(apps[i].appName),
-            subtitle: Text(apps[i].packageName),
-            onTap: () {
-              setState(() {
-                _targetName = apps[i].appName;
-                _targetPackage = apps[i].packageName;
-              });
-              Navigator.pop(ctx);
-            },
-          ),
-        )),
-      ));
-    } catch (e) {
-      _log("[!] Failed to list apps: $e");
-    }
-  }
-
-  void _showDownloaderDialog() {
+  void _showDownloader() {
     showModalBottomSheet(context: context, isScrollControlled: true, backgroundColor: Colors.grey[900], builder: (ctx) {
       return Padding(
-        padding: EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom, left: 20, right: 20, top: 20),
+        padding: const EdgeInsets.all(20),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             const Text("Binary Downloader", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
-            const SizedBox(height: 20),
-            
-            // Arch Selector
-            DropdownButtonFormField<String>(
+            const SizedBox(height: 15),
+            DropdownButtonFormField(
               value: _selectedArch,
               dropdownColor: Colors.grey[800],
-              decoration: const InputDecoration(labelText: "Architecture", labelStyle: TextStyle(color: Colors.grey), border: OutlineInputBorder()),
               style: const TextStyle(color: Colors.white),
-              items: _archOptions.map((v) => DropdownMenuItem(value: v, child: Text(v.toUpperCase()))).toList(),
-              onChanged: (v) => setState(() => _selectedArch = v!),
+              decoration: const InputDecoration(labelText: "Architecture", labelStyle: TextStyle(color: Colors.grey)),
+              items: _archOptions.map((a) => DropdownMenuItem(value: a, child: Text(a.toUpperCase()))).toList(),
+              onChanged: (v) => setState(() => _selectedArch = v.toString()),
             ),
             const SizedBox(height: 10),
-            
-            // Version Input
             TextField(
               controller: _fridaVersionCtrl,
               style: const TextStyle(color: Colors.white),
-              decoration: const InputDecoration(labelText: "Frida Version", labelStyle: TextStyle(color: Colors.grey), border: OutlineInputBorder(), helperText: "e.g. 16.2.5, 16.1.4"),
+              decoration: const InputDecoration(labelText: "Frida Version", labelStyle: TextStyle(color: Colors.grey)),
             ),
             const SizedBox(height: 20),
-            
-            ElevatedButton.icon(
-              icon: const Icon(Icons.download),
-              label: const Text("DOWNLOAD & INSTALL"),
-              style: ElevatedButton.styleFrom(backgroundColor: Colors.blue, padding: const EdgeInsets.all(15)),
+            ElevatedButton(
               onPressed: () => _downloadBinary(ctx),
+              style: ElevatedButton.styleFrom(backgroundColor: Colors.blue, minimumSize: const Size.fromHeight(50)),
+              child: const Text("DOWNLOAD"),
             ),
-            const SizedBox(height: 20),
+            const SizedBox(height: 200), // Spacing for keyboard
           ],
         ),
       );
     });
   }
 
-  void _openScriptManager() {
-    Navigator.push(context, MaterialPageRoute(builder: (context) => Scaffold(
-      backgroundColor: Colors.grey[900],
-      appBar: AppBar(title: const Text("Script Manager"), backgroundColor: Colors.black, actions: [
-        IconButton(icon: const Icon(Icons.add), onPressed: _importScript, tooltip: "Import .js")
-      ]),
-      body: Column(
-        children: [
-          Container(
-            padding: const EdgeInsets.all(10),
-            color: Colors.blueGrey[900],
-            child: const Row(children: [
-              Icon(Icons.info_outline, color: Colors.white70),
-              SizedBox(width: 10),
-              Expanded(child: Text("Drag items to reorder execution. Top scripts run first.", style: TextStyle(color: Colors.white70)))
-            ]),
-          ),
-          Expanded(
-            child: ReorderableListView(
-              onReorder: (oldIndex, newIndex) {
-                setState(() {
-                  if (newIndex > oldIndex) newIndex -= 1;
-                  final item = _scriptFiles.removeAt(oldIndex);
-                  _scriptFiles.insert(newIndex, item);
-                });
-              },
-              children: [
-                for (int i = 0; i < _scriptFiles.length; i++)
-                  ListTile(
-                    key: ValueKey(_scriptFiles[i].path),
-                    title: Text(_scriptFiles[i].path.split('/').last, style: const TextStyle(color: Colors.white)),
-                    leading: const Icon(Icons.drag_handle, color: Colors.grey),
-                    trailing: IconButton(
-                      icon: const Icon(Icons.delete, color: Colors.redAccent),
-                      onPressed: () => _deleteScript(_scriptFiles[i]),
-                    ),
-                  )
-              ],
-            ),
-          ),
-        ],
-      ),
-    )));
+  void _openScriptManager() async {
+    // Navigate to Manager Page
+    await Navigator.push(
+      context, 
+      MaterialPageRoute(builder: (context) => ScriptManagerPage(storageDir: _storageDir!))
+    );
+    // Refresh list when coming back
+    _refreshScripts();
+  }
+
+  void _pickApp() async {
+    List<Application> apps = await DeviceApps.getInstalledApplications(includeAppIcons: true);
+    showDialog(context: context, builder: (ctx) => AlertDialog(
+      title: const Text("Select Target"),
+      content: SizedBox(width: double.maxFinite, height: 400, child: ListView.builder(
+        itemCount: apps.length,
+        itemBuilder: (c, i) => ListTile(
+          leading: apps[i] is ApplicationWithIcon ? Image.memory((apps[i] as ApplicationWithIcon).icon, width: 32) : null,
+          title: Text(apps[i].appName),
+          subtitle: Text(apps[i].packageName, style: const TextStyle(fontSize: 10)),
+          onTap: () {
+            setState(() { _targetName = apps[i].appName; _targetPackage = apps[i].packageName; });
+            Navigator.pop(ctx);
+          },
+        ),
+      )),
+    ));
   }
 
   @override
@@ -416,11 +299,11 @@ class _SoCuteAppState extends State<SoCuteApp> {
     return Scaffold(
       backgroundColor: Colors.black,
       appBar: AppBar(
-        title: const Text("SoCute", style: TextStyle(fontWeight: FontWeight.bold)),
+        title: const Text("SoCute v2.2", style: TextStyle(fontWeight: FontWeight.bold)),
         backgroundColor: Colors.grey[900],
         actions: [
-           IconButton(icon: const Icon(Icons.settings_ethernet), tooltip: "Downloader", onPressed: _showDownloaderDialog),
-           IconButton(icon: const Icon(Icons.description), tooltip: "Scripts", onPressed: _openScriptManager),
+          IconButton(icon: const Icon(Icons.settings_ethernet), tooltip: "Downloader", onPressed: _showDownloader),
+          IconButton(icon: const Icon(Icons.folder_open), tooltip: "Script Manager", onPressed: _openScriptManager),
         ],
       ),
       body: Padding(
@@ -434,84 +317,257 @@ class _SoCuteAppState extends State<SoCuteApp> {
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10), side: const BorderSide(color: Colors.white24)),
               child: ListTile(
                 title: Text(_targetName, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                subtitle: Text(_targetPackage.isEmpty ? "Tap to select target app" : _targetPackage, style: const TextStyle(color: Colors.greenAccent)),
+                subtitle: Text(_targetPackage.isEmpty ? "Tap to select target" : _targetPackage, style: const TextStyle(color: Colors.greenAccent)),
                 trailing: const Icon(Icons.touch_app, color: Colors.blueAccent),
-                onTap: _isRunning ? null : _showAppPicker,
-              ),
-            ),
-            
-            // 2. STATUS INDICATORS
-            Padding(
-              padding: const EdgeInsets.symmetric(vertical: 10),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                children: [
-                  binaryReady 
-                      ? const Chip(label: Text("Binary OK", style: TextStyle(color: Colors.white)), backgroundColor: Colors.green)
-                      : ActionChip(label: const Text("Download Binary", style: TextStyle(color: Colors.white)), backgroundColor: Colors.red, onPressed: _showDownloaderDialog),
-                  Chip(label: Text("${_scriptFiles.length} Scripts", style: const TextStyle(color: Colors.white)), backgroundColor: Colors.blueGrey),
-                ],
+                onTap: _isRunning ? null : _pickApp,
               ),
             ),
 
-            // 3. ADVANCED TOGGLES (SELinux & Proxy)
+            // 2. PAYLOAD COMPOSER (The Reorderable List)
+            const SizedBox(height: 10),
+            const Text("Payload Composer (Drag to Reorder)", style: TextStyle(color: Colors.grey, fontSize: 12)),
+            Container(
+              height: 250, // FIXED HEIGHT SCROLLABLE WINDOW
+              decoration: BoxDecoration(color: Colors.grey[900], borderRadius: BorderRadius.circular(5), border: Border.all(color: Colors.white10)),
+              child: _scriptItems.isEmpty 
+                ? const Center(child: Text("No scripts found.\nGo to Manager to create/import.", textAlign: TextAlign.center, style: TextStyle(color: Colors.grey)))
+                : ReorderableListView(
+                    padding: const EdgeInsets.all(5),
+                    onReorder: (oldIndex, newIndex) {
+                      setState(() {
+                        if (newIndex > oldIndex) newIndex -= 1;
+                        final item = _scriptItems.removeAt(oldIndex);
+                        _scriptItems.insert(newIndex, item);
+                      });
+                    },
+                    children: [
+                      for (int i = 0; i < _scriptItems.length; i++)
+                        ListTile(
+                          key: ValueKey(_scriptItems[i].file.path),
+                          dense: true,
+                          tileColor: Colors.black12,
+                          leading: const Icon(Icons.drag_handle, color: Colors.grey),
+                          title: Text(_scriptItems[i].file.path.split('/').last, style: const TextStyle(color: Colors.white)),
+                          trailing: Checkbox(
+                            value: _scriptItems[i].isChecked,
+                            activeColor: Colors.green,
+                            onChanged: _isRunning ? null : (v) => setState(() => _scriptItems[i].isChecked = v!),
+                          ),
+                        )
+                    ],
+                  ),
+            ),
+
+            // 3. LAUNCH TOGGLES
             ExpansionTile(
-              title: const Text("Launch Config", style: TextStyle(color: Colors.white)),
-              collapsedBackgroundColor: Colors.grey[900],
-              backgroundColor: Colors.grey[900],
+              title: const Text("Launch Config", style: TextStyle(color: Colors.white, fontSize: 14)),
+              collapsedBackgroundColor: Colors.transparent,
               children: [
                 SwitchListTile(
                   title: const Text("Disable SELinux (Anti-Crash)", style: TextStyle(color: Colors.orangeAccent)),
-                  subtitle: const Text("Use if app crashes/reboots. Reduces security.", style: TextStyle(color: Colors.grey, fontSize: 11)),
-                  value: _disableSELinux,
-                  activeColor: Colors.orange,
+                  subtitle: const Text("Use if app reboots. Reduces Security.", style: TextStyle(color: Colors.grey, fontSize: 10)),
+                  value: _disableSELinux, activeColor: Colors.orange,
                   onChanged: _isRunning ? null : (v) => setState(() => _disableSELinux = v),
                 ),
                 SwitchListTile(
                   title: const Text("Inject Proxy", style: TextStyle(color: Colors.white)),
-                  value: _useProxy,
-                  activeColor: Colors.blue,
+                  subtitle: const Text("Overrides proxy via Frida Script", style: TextStyle(color: Colors.grey, fontSize: 10)),
+                  value: _useProxy, activeColor: Colors.blue,
                   onChanged: _isRunning ? null : (v) => setState(() => _useProxy = v),
                 ),
-                if (_useProxy) Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                  child: Row(children: [
-                    Expanded(child: TextField(controller: _ipCtrl, style: const TextStyle(color: Colors.white), decoration: const InputDecoration(labelText: "IP", labelStyle: TextStyle(color: Colors.grey)))),
-                    const SizedBox(width: 10),
-                    Expanded(child: TextField(controller: _portCtrl, style: const TextStyle(color: Colors.white), decoration: const InputDecoration(labelText: "Port", labelStyle: TextStyle(color: Colors.grey)))),
-                  ]),
-                )
+                if (_useProxy) Row(children: [
+                  Expanded(child: TextField(controller: _ipCtrl, style: const TextStyle(color: Colors.white), decoration: const InputDecoration(labelText: "IP", labelStyle: TextStyle(color: Colors.grey)))),
+                  const SizedBox(width: 10),
+                  Expanded(child: TextField(controller: _portCtrl, style: const TextStyle(color: Colors.white), decoration: const InputDecoration(labelText: "Port", labelStyle: TextStyle(color: Colors.grey)))),
+                ])
               ],
             ),
 
             const Spacer(),
 
-            // 4. BIG LAUNCH BUTTON
-            SizedBox(
-              height: 55,
-              child: ElevatedButton(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: _isRunning ? Colors.red[900] : Colors.greenAccent[700],
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            // 4. ACTION BUTTONS
+            Row(children: [
+              binaryReady ? const Icon(Icons.check_circle, color: Colors.green) : const Icon(Icons.error, color: Colors.red),
+              const SizedBox(width: 10),
+              Expanded(
+                child: ElevatedButton(
+                  style: ElevatedButton.styleFrom(backgroundColor: _isRunning ? Colors.red[900] : Colors.greenAccent[700], padding: const EdgeInsets.symmetric(vertical: 15)),
+                  onPressed: _isRunning ? _stopSequence : _launchSequence,
+                  child: Text(_isRunning ? "STOP INJECTION" : "LAUNCH", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
                 ),
-                onPressed: _isRunning ? _stopSequence : _launchSequence,
-                child: Text(
-                  _isRunning ? "STOP & KILL" : "LAUNCH INJECTION",
-                  style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold, letterSpacing: 1),
-                ),
-              ),
-            ),
+              )
+            ]),
 
-            const SizedBox(height: 15),
-
-            // 5. TERMINAL LOGS
+            // 5. LOGS
+            const SizedBox(height: 10),
             Container(
-              height: 180,
-              padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(color: Colors.black, border: Border.all(color: Colors.white24), borderRadius: BorderRadius.circular(5)),
+              height: 120,
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(color: Colors.black, border: Border.all(color: Colors.white24)),
               child: SingleChildScrollView(
                 reverse: true,
-                child: Text(_logs, style: const TextStyle(color: Colors.greenAccent, fontFamily: 'monospace', fontSize: 12)),
+                child: Text(_logs, style: const TextStyle(color: Colors.greenAccent, fontFamily: 'monospace', fontSize: 11)),
+              ),
+            )
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ==========================================
+// PAGE 2: SCRIPT MANAGER (ASSETS)
+// ==========================================
+class ScriptManagerPage extends StatefulWidget {
+  final String storageDir;
+  const ScriptManagerPage({super.key, required this.storageDir});
+
+  @override
+  State<ScriptManagerPage> createState() => _ScriptManagerPageState();
+}
+
+class _ScriptManagerPageState extends State<ScriptManagerPage> {
+  List<File> _files = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _loadFiles();
+  }
+
+  void _loadFiles() {
+    try {
+      final dir = Directory("${widget.storageDir}/scripts");
+      List<FileSystemEntity> raw = dir.listSync();
+      setState(() {
+        _files = raw.whereType<File>().where((f) => f.path.endsWith('.js')).toList();
+      });
+    } catch (e) {
+      debugPrint("Error: $e");
+    }
+  }
+
+  void _deleteFile(File f) {
+    try { f.deleteSync(); _loadFiles(); } catch(e) {/* ignore */}
+  }
+
+  void _goToEditor({File? file}) async {
+    await Navigator.push(context, MaterialPageRoute(builder: (ctx) => ScriptEditorPage(storageDir: widget.storageDir, fileToEdit: file)));
+    _loadFiles();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.grey[900],
+      appBar: AppBar(title: const Text("Script Manager"), backgroundColor: Colors.black),
+      floatingActionButton: FloatingActionButton(
+        backgroundColor: Colors.blue,
+        onPressed: () => _goToEditor(),
+        child: const Icon(Icons.add),
+      ),
+      body: _files.isEmpty 
+        ? const Center(child: Text("No scripts yet.\nTap + to create one.", textAlign: TextAlign.center, style: TextStyle(color: Colors.grey)))
+        : ListView.builder(
+            itemCount: _files.length,
+            itemBuilder: (ctx, i) {
+              return Card(
+                color: Colors.grey[850],
+                margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                child: ListTile(
+                  leading: const Icon(Icons.javascript, color: Colors.orange),
+                  title: Text(_files[i].path.split('/').last, style: const TextStyle(color: Colors.white)),
+                  onTap: () => _goToEditor(file: _files[i]),
+                  trailing: IconButton(
+                    icon: const Icon(Icons.delete, color: Colors.red),
+                    onPressed: () => _deleteFile(_files[i]),
+                  ),
+                ),
+              );
+            },
+          ),
+    );
+  }
+}
+
+// ==========================================
+// PAGE 3: SCRIPT EDITOR (CRUD)
+// ==========================================
+class ScriptEditorPage extends StatefulWidget {
+  final String storageDir;
+  final File? fileToEdit;
+  const ScriptEditorPage({super.key, required this.storageDir, this.fileToEdit});
+
+  @override
+  State<ScriptEditorPage> createState() => _ScriptEditorPageState();
+}
+
+class _ScriptEditorPageState extends State<ScriptEditorPage> {
+  final TextEditingController _nameCtrl = TextEditingController();
+  final TextEditingController _contentCtrl = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.fileToEdit != null) {
+      _nameCtrl.text = widget.fileToEdit!.path.split('/').last;
+      _contentCtrl.text = widget.fileToEdit!.readAsStringSync();
+    }
+  }
+
+  void _save() {
+    String name = _nameCtrl.text.trim();
+    if (!name.endsWith(".js")) name += ".js";
+    if (name.isEmpty || name == ".js") return;
+
+    File f = File("${widget.storageDir}/scripts/$name");
+    f.writeAsStringSync(_contentCtrl.text);
+    
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Saved!")));
+    Navigator.pop(context);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      appBar: AppBar(
+        title: Text(widget.fileToEdit == null ? "New Script" : "Edit Script"),
+        backgroundColor: Colors.grey[900],
+        actions: [
+          IconButton(icon: const Icon(Icons.save, color: Colors.blueAccent), onPressed: _save)
+        ],
+      ),
+      body: Padding(
+        padding: const EdgeInsets.all(10),
+        child: Column(
+          children: [
+            TextField(
+              controller: _nameCtrl,
+              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+              decoration: const InputDecoration(
+                labelText: "Filename (e.g. bypass.js)",
+                labelStyle: TextStyle(color: Colors.grey),
+                enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: Colors.grey)),
+              ),
+            ),
+            const SizedBox(height: 10),
+            Expanded(
+              child: Container(
+                padding: const EdgeInsets.all(5),
+                decoration: BoxDecoration(color: Colors.grey[900], borderRadius: BorderRadius.circular(5)),
+                child: TextField(
+                  controller: _contentCtrl,
+                  maxLines: null,
+                  expands: true,
+                  style: const TextStyle(color: Colors.greenAccent, fontFamily: 'monospace', fontSize: 13),
+                  decoration: const InputDecoration(
+                    border: InputBorder.none,
+                    hintText: "// Paste your Frida script here...",
+                    hintStyle: TextStyle(color: Colors.white24),
+                  ),
+                ),
               ),
             ),
           ],
