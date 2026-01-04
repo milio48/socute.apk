@@ -11,14 +11,15 @@ jobs:
 
       - name: Fetch and Merge Scripts
         run: |
-          # Define Source URLs
+          # 1. Define Source URLs
           BASE_URL="https://raw.githubusercontent.com/httptoolkit/frida-interception-and-unpinning/main"
           BUILD_DATE=$(date +"%B %d, %Y")
+          OUTPUT_FILE="fiau-by-httptoolkit.js"
           
-          # Create temporary directory for downloads
+          # 2. Create temporary directory for downloads
           mkdir -p temp_src
           
-          # Download all required scripts
+          # 3. Download all required scripts
           curl -s "$BASE_URL/config.js" -o temp_src/config.js
           curl -s "$BASE_URL/native-connect-hook.js" -o temp_src/native-connect-hook.js
           curl -s "$BASE_URL/native-tls-hook.js" -o temp_src/native-tls-hook.js
@@ -29,26 +30,18 @@ jobs:
           curl -s "$BASE_URL/android/android-disable-flutter-certificate-pinning.js" -o temp_src/android-disable-flutter-certificate-pinning.js
           curl -s "$BASE_URL/android/android-disable-root-detection.js" -o temp_src/android-disable-root-detection.js
 
-          # Inject Socute Placeholders into config.js
-          # Using Perl for reliable multi-line and regex handling
-          
-          # 1. Replace CERT_PEM (Template Literal)
+          # 4. Inject Socute Placeholders into config.js using Perl
           perl -0777 -pi -e 's/const CERT_PEM = `.*?`;/const CERT_PEM = `{{SOCUTE_CERT_PEM}}`;/s' temp_src/config.js
-          
-          # 2. Replace PROXY_HOST and PROXY_PORT
           perl -pi -e "s/const PROXY_HOST = '.*?';/const PROXY_HOST = '{{SOCUTE_PROXY_HOST}}';/g" temp_src/config.js
           perl -pi -e "s/const PROXY_PORT = .*?;/const PROXY_PORT = {{SOCUTE_PROXY_PORT}};/g" temp_src/config.js
-          
-          # 3. Replace New Boolean and Array Placeholders
           perl -pi -e "s/const DEBUG_MODE = .*?;/const DEBUG_MODE = {{SOCUTE_DEBUG_MODE}};/g" temp_src/config.js
           perl -pi -e "s/const IGNORED_NON_HTTP_PORTS = .*?;/const IGNORED_NON_HTTP_PORTS = {{SOCUTE_IGNORED_PORTS}};/g" temp_src/config.js
           perl -pi -e "s/const BLOCK_HTTP3 = .*?;/const BLOCK_HTTP3 = {{SOCUTE_BLOCK_HTTP3}};/g" temp_src/config.js
           perl -pi -e "s/const PROXY_SUPPORTS_SOCKS5 = .*?;/const PROXY_SUPPORTS_SOCKS5 = {{SOCUTE_SOCKS5_SUPPORT}};/g" temp_src/config.js
 
-          # Initialize Final Merged File
-          OUTPUT_FILE="fiau-by-httptoolkit.js"
-          
-          echo "/**************************************************************************************************
+          # 5. Build Final File Header using Heredoc (Fix for Line 52)
+          cat <<EOF > $OUTPUT_FILE
+/**************************************************************************************************
  * 🛡️ SOCUTE.APK - Unified Android Interception Engine
  * ------------------------------------------------------------------------------------------------
  * Build Date : $BUILD_DATE
@@ -56,34 +49,50 @@ jobs:
  * Source     : https://github.com/httptoolkit/frida-interception-and-unpinning
  * License    : AGPL-3.0-or-later
  *
- * [SEQUENCE LOGIC]
- * Config is loaded first to initialize globals. Native hooks follow to catch low-level
- * handshakes. Java-level overrides and unpinning are applied to the framework, 
- * followed by specialized Flutter bypass and stealth modules.
- **************************************************************************************************/" > $OUTPUT_FILE
+ * [MERGE SEQUENCE]
+ * frida -U \\
+ * -l ./config.js \\
+ * -l ./native-connect-hook.js \\
+ * -l ./native-tls-hook.js \\
+ * -l ./android/android-proxy-override.js \\
+ * -l ./android/android-system-certificate-injection.js \\
+ * -l ./android/android-certificate-unpinning.js \\
+ * -l ./android/android-certificate-unpinning-fallback.js \\
+ * -l ./android/android-disable-flutter-certificate-pinning.js \\
+ * -l ./android/android-disable-root-detection.js \\
+ * -f \$PACKAGE_ID
+ **************************************************************************************************/
+EOF
 
-          # Append modules with semantic headers
-          {
-            echo -e "\n/** [MODULE 1] Core Configuration */"
-            cat temp_src/config.js
-            echo -e "\n/** [MODULE 2] Native Socket Redirection */"
-            cat temp_src/native-connect-hook.js
-            echo -e "\n/** [MODULE 3] Native TLS Interceptor */"
-            cat temp_src/native-tls-hook.js
-            echo -e "\n/** [MODULE 4] Java Proxy Override */"
-            cat temp_src/android-proxy-override.js
-            echo -e "\n/** [MODULE 5] Dynamic Certificate Injection */"
-            cat temp_src/android-system-certificate-injection.js
-            echo -e "\n/** [MODULE 6] Universal Java Unpinning */"
-            cat temp_src/android-certificate-unpinning.js
-            echo -e "\n/** [MODULE 7] Java Unpinning Fallback */"
-            cat temp_src/android-certificate-unpinning-fallback.js
-            echo -e "\n/** [MODULE 8] Flutter Engine Bypass */"
-            cat temp_src/android-disable-flutter-certificate-pinning.js
-            echo -e "\n/** [MODULE 9] Anti-Detection & Stealth */"
-            cat temp_src/android-disable-root-detection.js
-            echo -e "\n// --- END OF ENGINE ---"
-          } >> $OUTPUT_FILE
+          # 6. Append modules with English comments
+          echo -e "\n/** [MODULE 1] Core Configuration & Utilities */" >> $OUTPUT_FILE
+          cat temp_src/config.js >> $OUTPUT_FILE
+
+          echo -e "\n/** [MODULE 2] Low-Level Socket Redirection */" >> $OUTPUT_FILE
+          cat temp_src/native-connect-hook.js >> $OUTPUT_FILE
+
+          echo -e "\n/** [MODULE 3] Native TLS Interceptor */" >> $OUTPUT_FILE
+          cat temp_src/native-tls-hook.js >> $OUTPUT_FILE
+
+          echo -e "\n/** [MODULE 4] Java Proxy Override */" >> $OUTPUT_FILE
+          cat temp_src/android-proxy-override.js >> $OUTPUT_FILE
+
+          echo -e "\n/** [MODULE 5] Dynamic Certificate Injection */" >> $OUTPUT_FILE
+          cat temp_src/android-system-certificate-injection.js >> $OUTPUT_FILE
+
+          echo -e "\n/** [MODULE 6] Universal Java Unpinning */" >> $OUTPUT_FILE
+          cat temp_src/android-certificate-unpinning.js >> $OUTPUT_FILE
+
+          echo -e "\n/** [MODULE 7] Java Unpinning Fallback */" >> $OUTPUT_FILE
+          cat temp_src/android-certificate-unpinning-fallback.js >> $OUTPUT_FILE
+
+          echo -e "\n/** [MODULE 8] Flutter Engine Bypass */" >> $OUTPUT_FILE
+          cat temp_src/android-disable-flutter-certificate-pinning.js >> $OUTPUT_FILE
+
+          echo -e "\n/** [MODULE 9] Anti-Detection & Stealth */" >> $OUTPUT_FILE
+          cat temp_src/android-disable-root-detection.js >> $OUTPUT_FILE
+
+          echo -e "\n// --- END OF ENGINE ---" >> $OUTPUT_FILE
 
       - name: Git Commit and Push
         run: |
