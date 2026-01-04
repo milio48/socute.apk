@@ -1,6 +1,9 @@
-name: Build Socute Engine
+name: Build fiau script
 on:
-  workflow_dispatch: # Manual trigger from GitHub UI
+  workflow_dispatch: # Manual trigger
+
+permissions:
+  contents: write
 
 jobs:
   merge-scripts:
@@ -8,6 +11,8 @@ jobs:
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Fetch and Merge Scripts
         run: |
@@ -37,7 +42,7 @@ jobs:
           perl -pi -e "s/const BLOCK_HTTP3 = .*?;/const BLOCK_HTTP3 = {{SOCUTE_BLOCK_HTTP3}};/g" temp_src/config.js
           perl -pi -e "s/const PROXY_SUPPORTS_SOCKS5 = .*?;/const PROXY_SUPPORTS_SOCKS5 = {{SOCUTE_SOCKS5_SUPPORT}};/g" temp_src/config.js
 
-          # 4. Create Header (Using individual echo to avoid indentation issues)
+          # 4. Create Header
           echo "/**************************************************************************************************" > $OUTPUT_FILE
           echo " * 🛡️ SOCUTE.APK - Unified Android Interception Engine" >> $OUTPUT_FILE
           echo " * ------------------------------------------------------------------------------------------------" >> $OUTPUT_FILE
@@ -54,31 +59,22 @@ jobs:
           # 5. Concatenate Modules
           echo -e "\n/** [MODULE 1] Core Configuration & Utilities */" >> $OUTPUT_FILE
           cat temp_src/config.js >> $OUTPUT_FILE
-
           echo -e "\n/** [MODULE 2] Low-Level Socket Redirection */" >> $OUTPUT_FILE
           cat temp_src/native-connect-hook.js >> $OUTPUT_FILE
-
           echo -e "\n/** [MODULE 3] Native TLS Interceptor */" >> $OUTPUT_FILE
           cat temp_src/native-tls-hook.js >> $OUTPUT_FILE
-
           echo -e "\n/** [MODULE 4] Java Proxy Override */" >> $OUTPUT_FILE
           cat temp_src/android-proxy-override.js >> $OUTPUT_FILE
-
           echo -e "\n/** [MODULE 5] Dynamic Certificate Injection */" >> $OUTPUT_FILE
           cat temp_src/android-system-certificate-injection.js >> $OUTPUT_FILE
-
           echo -e "\n/** [MODULE 6] Universal Java Unpinning */" >> $OUTPUT_FILE
           cat temp_src/android-certificate-unpinning.js >> $OUTPUT_FILE
-
           echo -e "\n/** [MODULE 7] Java Unpinning Fallback */" >> $OUTPUT_FILE
           cat temp_src/android-certificate-unpinning-fallback.js >> $OUTPUT_FILE
-
           echo -e "\n/** [MODULE 8] Flutter Engine Bypass */" >> $OUTPUT_FILE
           cat temp_src/android-disable-flutter-certificate-pinning.js >> $OUTPUT_FILE
-
           echo -e "\n/** [MODULE 9] Anti-Detection & Stealth */" >> $OUTPUT_FILE
           cat temp_src/android-disable-root-detection.js >> $OUTPUT_FILE
-
           echo -e "\n// --- END OF ENGINE ---" >> $OUTPUT_FILE
 
       - name: Git Commit and Push
@@ -86,5 +82,5 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add fiau-by-httptoolkit.js
-          git commit -m "chore: update interception engine ($BUILD_DATE)" || echo "No changes to commit"
-          git push
+          git commit -m "chore: update interception engine" || echo "No changes to commit"
+          git push origin HEAD:main
