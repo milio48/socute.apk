@@ -1,6 +1,6 @@
 name: Build Socute Engine
 on:
-  workflow_dispatch: # Allows manual trigger from the Actions tab
+  workflow_dispatch: # Manual trigger from GitHub UI
 
 jobs:
   merge-scripts:
@@ -11,15 +11,13 @@ jobs:
 
       - name: Fetch and Merge Scripts
         run: |
-          # 1. Define Source URLs
+          # 1. Setup Environment
           BASE_URL="https://raw.githubusercontent.com/httptoolkit/frida-interception-and-unpinning/main"
           BUILD_DATE=$(date +"%B %d, %Y")
           OUTPUT_FILE="fiau-by-httptoolkit.js"
-          
-          # 2. Create temporary directory for downloads
           mkdir -p temp_src
-          
-          # 3. Download all required scripts
+
+          # 2. Download Modules
           curl -s "$BASE_URL/config.js" -o temp_src/config.js
           curl -s "$BASE_URL/native-connect-hook.js" -o temp_src/native-connect-hook.js
           curl -s "$BASE_URL/native-tls-hook.js" -o temp_src/native-tls-hook.js
@@ -30,7 +28,7 @@ jobs:
           curl -s "$BASE_URL/android/android-disable-flutter-certificate-pinning.js" -o temp_src/android-disable-flutter-certificate-pinning.js
           curl -s "$BASE_URL/android/android-disable-root-detection.js" -o temp_src/android-disable-root-detection.js
 
-          # 4. Inject Socute Placeholders into config.js using Perl
+          # 3. Inject SOCUTE Placeholders using Perl
           perl -0777 -pi -e 's/const CERT_PEM = `.*?`;/const CERT_PEM = `{{SOCUTE_CERT_PEM}}`;/s' temp_src/config.js
           perl -pi -e "s/const PROXY_HOST = '.*?';/const PROXY_HOST = '{{SOCUTE_PROXY_HOST}}';/g" temp_src/config.js
           perl -pi -e "s/const PROXY_PORT = .*?;/const PROXY_PORT = {{SOCUTE_PROXY_PORT}};/g" temp_src/config.js
@@ -39,32 +37,21 @@ jobs:
           perl -pi -e "s/const BLOCK_HTTP3 = .*?;/const BLOCK_HTTP3 = {{SOCUTE_BLOCK_HTTP3}};/g" temp_src/config.js
           perl -pi -e "s/const PROXY_SUPPORTS_SOCKS5 = .*?;/const PROXY_SUPPORTS_SOCKS5 = {{SOCUTE_SOCKS5_SUPPORT}};/g" temp_src/config.js
 
-          # 5. Build Final File Header using Heredoc (Fix for Line 52)
-          cat <<EOF > $OUTPUT_FILE
-/**************************************************************************************************
- * 🛡️ SOCUTE.APK - Unified Android Interception Engine
- * ------------------------------------------------------------------------------------------------
- * Build Date : $BUILD_DATE
- * Author     : Milio48 (socute.apk)
- * Source     : https://github.com/httptoolkit/frida-interception-and-unpinning
- * License    : AGPL-3.0-or-later
- *
- * [MERGE SEQUENCE]
- * frida -U \\
- * -l ./config.js \\
- * -l ./native-connect-hook.js \\
- * -l ./native-tls-hook.js \\
- * -l ./android/android-proxy-override.js \\
- * -l ./android/android-system-certificate-injection.js \\
- * -l ./android/android-certificate-unpinning.js \\
- * -l ./android/android-certificate-unpinning-fallback.js \\
- * -l ./android/android-disable-flutter-certificate-pinning.js \\
- * -l ./android/android-disable-root-detection.js \\
- * -f \$PACKAGE_ID
- **************************************************************************************************/
-EOF
+          # 4. Create Header (Using individual echo to avoid indentation issues)
+          echo "/**************************************************************************************************" > $OUTPUT_FILE
+          echo " * 🛡️ SOCUTE.APK - Unified Android Interception Engine" >> $OUTPUT_FILE
+          echo " * ------------------------------------------------------------------------------------------------" >> $OUTPUT_FILE
+          echo " * Build Date : $BUILD_DATE" >> $OUTPUT_FILE
+          echo " * Author     : Milio48 (socute.apk)" >> $OUTPUT_FILE
+          echo " * Source     : https://github.com/httptoolkit/frida-interception-and-unpinning" >> $OUTPUT_FILE
+          echo " * License    : AGPL-3.0-or-later" >> $OUTPUT_FILE
+          echo " *" >> $OUTPUT_FILE
+          echo " * [MERGE SEQUENCE]" >> $OUTPUT_FILE
+          echo " * 1. config, 2. native-connect, 3. native-tls, 4. proxy-override," >> $OUTPUT_FILE
+          echo " * 5. cert-injection, 6. unpinning, 7. fallback, 8. flutter, 9. anti-root" >> $OUTPUT_FILE
+          echo " **************************************************************************************************/" >> $OUTPUT_FILE
 
-          # 6. Append modules with English comments
+          # 5. Concatenate Modules
           echo -e "\n/** [MODULE 1] Core Configuration & Utilities */" >> $OUTPUT_FILE
           cat temp_src/config.js >> $OUTPUT_FILE
 
