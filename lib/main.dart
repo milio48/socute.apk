@@ -31,10 +31,9 @@ class ScriptItem {
   ScriptItem({this.file, this.isVirtual = false, this.isChecked = true, required this.name});
 }
 
-// --- ENGINE BUILDER (The Logic Core) ---
+// --- ENGINE BUILDER (Logic Core v2.4.1) ---
 class SocuteEngineBuilder {
   static const String TEMPLATE_FILENAME = "fiau_template.js";
-  // URL Raw ke script kamu
   static const String RAW_URL = "https://raw.githubusercontent.com/milio48/socute.apk/refs/heads/main/fiau-by-httptoolkit.js";
 
   static Future<bool> isTemplateAvailable() async {
@@ -68,6 +67,13 @@ class SocuteEngineBuilder {
     String port = prefs.getString('cfg_port') ?? "8080";
     bool debug = prefs.getBool('cfg_debug') ?? false;
     bool blockHttp3 = prefs.getBool('cfg_http3') ?? true;
+    
+    // Advanced Configs
+    String ignoredPortsRaw = prefs.getString('cfg_ignored') ?? "";
+    bool socks5 = prefs.getBool('cfg_socks5') ?? false;
+
+    // Convert "22, 53" -> "[22, 53]"
+    String ignoredPortsJson = ignoredPortsRaw.trim().isEmpty ? "[]" : "[${ignoredPortsRaw}]";
 
     // Replace Placeholders
     final replacements = {
@@ -76,8 +82,8 @@ class SocuteEngineBuilder {
       '{{SOCUTE_PROXY_PORT}}': port,
       '{{SOCUTE_DEBUG_MODE}}': debug.toString(),
       '{{SOCUTE_BLOCK_HTTP3}}': blockHttp3.toString(),
-      '{{SOCUTE_IGNORED_PORTS}}': '[]', 
-      '{{SOCUTE_SOCKS5_SUPPORT}}': 'false',
+      '{{SOCUTE_IGNORED_PORTS}}': ignoredPortsJson,
+      '{{SOCUTE_SOCKS5_SUPPORT}}': socks5.toString(),
     };
 
     replacements.forEach((key, val) {
@@ -99,7 +105,7 @@ class LauncherPage extends StatefulWidget {
 
 class _LauncherPageState extends State<LauncherPage> {
   // Logs & Process
-  String _logs = "Initializing SoCute v2.4 (Cloud Engine)...\n";
+  String _logs = "Initializing SoCute v2.4 (Cloud Engine)...";
   bool _isRunning = false;
   Process? _runningProcess;
 
@@ -249,7 +255,6 @@ class _LauncherPageState extends State<LauncherPage> {
             continue;
           }
           _log("[+] Generating Universal Interceptor Payload...");
-          // GENERATE REAL SCRIPT FROM TEMPLATE + CONFIG
           String fiauScript = await SocuteEngineBuilder.generateScript();
           sink.writeln("\n// --- MODULE: UNIVERSAL INTERCEPTOR ---");
           sink.writeln(fiauScript);
@@ -279,7 +284,7 @@ class _LauncherPageState extends State<LauncherPage> {
 
   void _log(String text) {
     if (!mounted) return;
-    setState(() => _logs += "$text\n");
+    setState(() => _logs += "\n$text");
   }
 
   void _openConfigDialog() async {
@@ -381,42 +386,44 @@ class _LauncherPageState extends State<LauncherPage> {
               ],
             ),
 
-            // COMPOSER LIST (Virtual + Physical)
-            Container(
-              height: 250, 
-              decoration: BoxDecoration(color: Colors.grey[900], borderRadius: BorderRadius.circular(5), border: Border.all(color: Colors.white10)),
-              child: ReorderableListView(
-                padding: const EdgeInsets.all(5),
-                onReorder: (oldIndex, newIndex) {
-                  setState(() {
-                    if (newIndex > oldIndex) newIndex -= 1;
-                    final item = _scriptItems.removeAt(oldIndex);
-                    _scriptItems.insert(newIndex, item);
-                  });
-                },
-                children: [
-                  for (int i = 0; i < _scriptItems.length; i++)
-                    ListTile(
-                      key: ValueKey("item_$i"),
-                      dense: true,
-                      tileColor: _scriptItems[i].isVirtual ? Colors.blue.withOpacity(0.1) : Colors.black12,
-                      leading: Icon(Icons.drag_handle, color: _scriptItems[i].isVirtual ? Colors.orange : Colors.grey),
-                      title: Text(
-                        _scriptItems[i].name, 
-                        style: TextStyle(
-                          color: _scriptItems[i].isVirtual ? Colors.orangeAccent : Colors.white,
-                          fontWeight: _scriptItems[i].isVirtual ? FontWeight.bold : FontWeight.normal
-                        )
-                      ),
-                      trailing: Checkbox(
-                        value: _scriptItems[i].isChecked,
-                        activeColor: Colors.green,
-                        onChanged: _isRunning || (_scriptItems[i].isVirtual && !_isEngineReady) 
-                          ? null 
-                          : (v) => setState(() => _scriptItems[i].isChecked = v!),
-                      ),
-                    )
-                ],
+            // COMPOSER LIST
+            Expanded( // Gunakan Expanded agar list ini mengisi ruang sisa
+              child: Container(
+                margin: const EdgeInsets.only(bottom: 10),
+                decoration: BoxDecoration(color: Colors.grey[900], borderRadius: BorderRadius.circular(5), border: Border.all(color: Colors.white10)),
+                child: ReorderableListView(
+                  padding: const EdgeInsets.all(5),
+                  onReorder: (oldIndex, newIndex) {
+                    setState(() {
+                      if (newIndex > oldIndex) newIndex -= 1;
+                      final item = _scriptItems.removeAt(oldIndex);
+                      _scriptItems.insert(newIndex, item);
+                    });
+                  },
+                  children: [
+                    for (int i = 0; i < _scriptItems.length; i++)
+                      ListTile(
+                        key: ValueKey("item_$i"),
+                        dense: true,
+                        tileColor: _scriptItems[i].isVirtual ? Colors.blue.withOpacity(0.1) : Colors.black12,
+                        leading: Icon(Icons.drag_handle, color: _scriptItems[i].isVirtual ? Colors.orange : Colors.grey),
+                        title: Text(
+                          _scriptItems[i].name, 
+                          style: TextStyle(
+                            color: _scriptItems[i].isVirtual ? Colors.orangeAccent : Colors.white,
+                            fontWeight: _scriptItems[i].isVirtual ? FontWeight.bold : FontWeight.normal
+                          )
+                        ),
+                        trailing: Checkbox(
+                          value: _scriptItems[i].isChecked,
+                          activeColor: Colors.green,
+                          onChanged: _isRunning || (_scriptItems[i].isVirtual && !_isEngineReady) 
+                            ? null 
+                            : (v) => setState(() => _scriptItems[i].isChecked = v!),
+                        ),
+                      )
+                  ],
+                ),
               ),
             ),
 
@@ -429,7 +436,7 @@ class _LauncherPageState extends State<LauncherPage> {
               onChanged: _isRunning ? null : (v) => setState(() => _disableSELinux = v),
             ),
 
-            const Spacer(),
+            const SizedBox(height: 10),
 
             // LAUNCH BUTTON
             ElevatedButton(
@@ -452,8 +459,10 @@ class _LauncherPageState extends State<LauncherPage> {
                 )
               ],
             ),
+            
+            // [UX FIX] Box Log dibuat lebih tinggi
             Container(
-              height: 150, // More space
+              height: 160, 
               width: double.infinity,
               padding: const EdgeInsets.all(8),
               decoration: BoxDecoration(color: Colors.black, border: Border.all(color: Colors.white24)),
@@ -462,7 +471,10 @@ class _LauncherPageState extends State<LauncherPage> {
                 child: SelectableText(_logs, style: const TextStyle(color: Colors.greenAccent, fontFamily: 'monospace', fontSize: 11)),
               ),
             ),
-            const SizedBox(height: 30), // [FIX] Extra Margin Bottom
+            
+            // [UX FIX] MARGIN BOTTOM YANG LEGA (FOOTER)
+            // Ini memastikan log paling bawah bisa naik ke atas
+            const SizedBox(height: 50), 
           ],
         ),
       ),
@@ -503,7 +515,6 @@ class _LauncherPageState extends State<LauncherPage> {
             items: _archOptions.map((a) => DropdownMenuItem(value: a, child: Text(a))).toList(),
             onChanged: (v) => setState(() => _selectedArch = v.toString()),
           ),
-          // [FIX] Added HintText for version
           TextField(
             controller: _fridaVersionCtrl, 
             decoration: const InputDecoration(labelText: "Frida Version", hintText: "e.g. 16.2.5 or 17.5.2")
@@ -534,7 +545,7 @@ class _LauncherPageState extends State<LauncherPage> {
 }
 
 // ==========================================
-// CONFIG DIALOG (NEW FEATURE)
+// CONFIG DIALOG (Complete with Hints, Ignored Ports, SOCKS5)
 // ==========================================
 class ConfigDialog extends StatefulWidget {
   const ConfigDialog({super.key});
@@ -546,8 +557,12 @@ class _ConfigDialogState extends State<ConfigDialog> {
   final _certCtrl = TextEditingController();
   final _ipCtrl = TextEditingController();
   final _portCtrl = TextEditingController();
+  final _ignoredCtrl = TextEditingController();
+  
   bool _debug = false;
   bool _blockHttp3 = true;
+  bool _socks5 = false;
+  
   bool _hasEngine = false;
   bool _downloading = false;
 
@@ -564,8 +579,11 @@ class _ConfigDialogState extends State<ConfigDialog> {
       _certCtrl.text = prefs.getString('cfg_cert') ?? "";
       _ipCtrl.text = prefs.getString('cfg_ip') ?? "";
       _portCtrl.text = prefs.getString('cfg_port') ?? "";
+      _ignoredCtrl.text = prefs.getString('cfg_ignored') ?? "";
+      
       _debug = prefs.getBool('cfg_debug') ?? false;
       _blockHttp3 = prefs.getBool('cfg_http3') ?? true;
+      _socks5 = prefs.getBool('cfg_socks5') ?? false;
     });
   }
 
@@ -579,8 +597,12 @@ class _ConfigDialogState extends State<ConfigDialog> {
     await prefs.setString('cfg_cert', _certCtrl.text);
     await prefs.setString('cfg_ip', _ipCtrl.text);
     await prefs.setString('cfg_port', _portCtrl.text);
+    await prefs.setString('cfg_ignored', _ignoredCtrl.text);
+    
     await prefs.setBool('cfg_debug', _debug);
     await prefs.setBool('cfg_http3', _blockHttp3);
+    await prefs.setBool('cfg_socks5', _socks5);
+    
     if (mounted) Navigator.pop(context);
   }
 
@@ -616,7 +638,7 @@ class _ConfigDialogState extends State<ConfigDialog> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // ENGINE STATUS
+            // 1. ENGINE STATUS
             Container(
               padding: const EdgeInsets.all(10),
               decoration: BoxDecoration(color: Colors.black, borderRadius: BorderRadius.circular(5), border: Border.all(color: _hasEngine ? Colors.green : Colors.red)),
@@ -632,7 +654,7 @@ class _ConfigDialogState extends State<ConfigDialog> {
             ),
             const SizedBox(height: 15),
 
-            // CERTIFICATE INPUT (With Hint)
+            // 2. CERTIFICATE
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
@@ -642,19 +664,18 @@ class _ConfigDialogState extends State<ConfigDialog> {
             ),
             TextField(
               controller: _certCtrl,
-              maxLines: 6,
-              minLines: 3,
+              maxLines: 4, 
+              minLines: 2,
               style: const TextStyle(color: Colors.white, fontSize: 10, fontFamily: 'monospace'),
               decoration: const InputDecoration(
                 filled: true, fillColor: Colors.black,
                 border: OutlineInputBorder(),
-                // [FIX] Hint for Certificate
-                hintText: "-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----",
+                hintText: "-----BEGIN CERTIFICATE-----\n...",
                 hintStyle: TextStyle(color: Colors.grey)
               ),
             ),
 
-            // PROXY CONFIG (With Hints)
+            // 3. PROXY CONFIG
             const SizedBox(height: 10),
             Row(children: [
               Expanded(child: TextField(
@@ -662,10 +683,9 @@ class _ConfigDialogState extends State<ConfigDialog> {
                 style: const TextStyle(color: Colors.white), 
                 decoration: const InputDecoration(
                   labelText: "Proxy IP", 
-                  labelStyle: TextStyle(color: Colors.grey),
-                  // [FIX] Hint for IP
                   hintText: "e.g. 192.168.1.15",
-                  hintStyle: TextStyle(color: Colors.white24)
+                  hintStyle: TextStyle(color: Colors.white24),
+                  labelStyle: TextStyle(color: Colors.grey)
                 )
               )),
               const SizedBox(width: 10),
@@ -675,20 +695,41 @@ class _ConfigDialogState extends State<ConfigDialog> {
                 style: const TextStyle(color: Colors.white), 
                 decoration: const InputDecoration(
                   labelText: "Port", 
-                  labelStyle: TextStyle(color: Colors.grey),
-                  // [FIX] Hint for Port
                   hintText: "8080",
-                  hintStyle: TextStyle(color: Colors.white24)
+                  hintStyle: TextStyle(color: Colors.white24),
+                  labelStyle: TextStyle(color: Colors.grey)
                 )
               )),
             ]),
+            
+            // 4. IGNORED PORTS
+            const SizedBox(height: 10),
+            TextField(
+              controller: _ignoredCtrl, 
+              keyboardType: TextInputType.number,
+              style: const TextStyle(color: Colors.white), 
+              decoration: const InputDecoration(
+                labelText: "Ignored Ports", 
+                hintText: "e.g. 22, 53, 8883",
+                hintStyle: TextStyle(color: Colors.white24),
+                labelStyle: TextStyle(color: Colors.grey),
+                prefixIcon: Icon(Icons.block, color: Colors.grey, size: 18)
+              )
+            ),
 
-            // TOGGLES
+            // 5. TOGGLES
+            const SizedBox(height: 5),
             SwitchListTile(
               title: const Text("Block HTTP/3 (QUIC)", style: TextStyle(color: Colors.white, fontSize: 14)),
               subtitle: const Text("Force downgrade to HTTP/1.1", style: TextStyle(color: Colors.grey, fontSize: 10)),
               value: _blockHttp3, onChanged: (v) => setState(() => _blockHttp3 = v),
               activeColor: Colors.blue, contentPadding: EdgeInsets.zero,
+            ),
+            SwitchListTile(
+              title: const Text("Use SOCKS5 Proxy", style: TextStyle(color: Colors.white, fontSize: 14)),
+              subtitle: const Text("Enable if using SSH/SOCKS tunnel", style: TextStyle(color: Colors.grey, fontSize: 10)),
+              value: _socks5, onChanged: (v) => setState(() => _socks5 = v),
+              activeColor: Colors.purpleAccent, contentPadding: EdgeInsets.zero,
             ),
             SwitchListTile(
               title: const Text("Debug Mode", style: TextStyle(color: Colors.white, fontSize: 14)),
@@ -790,7 +831,6 @@ class _ScriptEditorPageState extends State<ScriptEditorPage> {
       backgroundColor: Colors.black,
       appBar: AppBar(title: Text(widget.fileToEdit == null ? "New Script" : "Edit Script"), backgroundColor: Colors.grey[900], actions: [IconButton(icon: const Icon(Icons.save, color: Colors.blueAccent), onPressed: _save)]),
       body: Padding(padding: const EdgeInsets.all(10), child: Column(children: [
-        // [FIX] Hint for Filename
         TextField(controller: _nameCtrl, style: const TextStyle(color: Colors.white), decoration: const InputDecoration(labelText: "Filename", hintText: "myscript.js", enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: Colors.grey)))),
         const SizedBox(height: 10),
         Expanded(child: Container(padding: const EdgeInsets.all(5), decoration: BoxDecoration(color: Colors.grey[900], borderRadius: BorderRadius.circular(5)), child: TextField(controller: _contentCtrl, maxLines: null, expands: true, style: const TextStyle(color: Colors.greenAccent, fontFamily: 'monospace', fontSize: 13), decoration: const InputDecoration(border: InputBorder.none, hintText: "// Paste your Frida script here...")))),
