@@ -1,4 +1,4 @@
-name: Build & Release SoCute v2.3
+name: Build & Release SoCute v2.4
 
 on:
   push:
@@ -30,13 +30,12 @@ jobs:
 
       - name: Generate Project & Install Dependencies
         run: |
-          # 1. Create project structure
           flutter create . --project-name socute --org com.socute
           flutter config --no-analytics
           
-          # 2. Install Dependencies
-          # Included: file_picker (Script Manager) & flutter_launcher_icons (Fix Icon)
-          flutter pub add dio archive path_provider device_info_plus device_apps file_picker flutter_launcher_icons
+          # 2. Install Dependencies (UPDATED v2.4)
+          # Added: http, shared_preferences
+          flutter pub add dio archive path_provider device_info_plus device_apps file_picker flutter_launcher_icons http shared_preferences
 
       # --- GENERATE ICON ---
       - name: Generate App Icon
@@ -46,7 +45,7 @@ jobs:
           import subprocess
           
           if os.path.exists('icon.png'):
-              print('Custom icon found! Generating config...')
+              print('Custom icon found!')
               config = \"\"\"
           flutter_icons:
             android: 'ic_launcher'
@@ -57,11 +56,9 @@ jobs:
               with open('flutter_launcher_icons.yaml', 'w') as f:
                   f.write(config.strip())
               subprocess.run(['flutter', 'pub', 'run', 'flutter_launcher_icons'], check=True)
-          else:
-              print('No icon.png found. Using default Flutter logo.')
           "
 
-      # --- MANIFEST UPDATE ---
+      # --- MANIFEST UPDATE (With Storage Permission) ---
       - name: Update AndroidManifest.xml
         run: |
           python3 -c "
@@ -71,15 +68,17 @@ jobs:
           if os.path.exists(manifest_path):
               os.remove(manifest_path)
           
-          # Manifest for v2.3
+          # Manifest for v2.4 (Added READ_EXTERNAL_STORAGE)
           manifest_content = \"\"\"<manifest xmlns:android='http://schemas.android.com/apk/res/android' package='com.socute.socute'>
               <uses-permission android:name='android.permission.INTERNET'/>
               <uses-permission android:name='android.permission.QUERY_ALL_PACKAGES'/>
+              <uses-permission android:name='android.permission.READ_EXTERNAL_STORAGE'/> 
               
               <application
                   android:label='SoCute'
                   android:name='\${applicationName}'
-                  android:icon='@mipmap/ic_launcher'>
+                  android:icon='@mipmap/ic_launcher'
+                  android:requestLegacyExternalStorage='true'>
                   <activity
                       android:name='.MainActivity'
                       android:exported='true'
@@ -88,53 +87,37 @@ jobs:
                       android:configChanges='orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode'
                       android:hardwareAccelerated='true'
                       android:windowSoftInputMode='adjustResize'>
-                      <meta-data
-                        android:name='io.flutter.embedding.android.NormalTheme'
-                        android:resource='@style/NormalTheme'
-                        />
+                      <meta-data android:name='io.flutter.embedding.android.NormalTheme' android:resource='@style/NormalTheme'/>
                       <intent-filter>
                           <action android:name='android.intent.action.MAIN'/>
                           <category android:name='android.intent.category.LAUNCHER'/>
                       </intent-filter>
                   </activity>
-                  <meta-data
-                      android:name='flutterEmbedding'
-                      android:value='2' />
+                  <meta-data android:name='flutterEmbedding' android:value='2' />
               </application>
           </manifest>\"\"\"
           
           with open(manifest_path, 'w') as f:
               f.write(manifest_content)
-          print('✅ AndroidManifest.xml updated for v2.3')
+          print('✅ AndroidManifest.xml updated for v2.4')
           "
 
       - name: Install Dart Dependencies
         run: flutter pub get
 
-      # --- BUILD RELEASE ---
       - name: Build Release APK
         run: flutter build apk --release --no-tree-shake-icons
 
       - name: Rename APK
-        run: mv build/app/outputs/flutter-apk/app-release.apk build/app/outputs/flutter-apk/socute-v2.3.apk
+        run: mv build/app/outputs/flutter-apk/app-release.apk build/app/outputs/flutter-apk/socute-v2.4.apk
 
       - name: Create Release & Upload APK
         uses: ncipollo/release-action@v1
         with:
-          artifacts: "build/app/outputs/flutter-apk/socute-v2.3.apk"
+          artifacts: "build/app/outputs/flutter-apk/socute-v2.4.apk"
           token: ${{ secrets.GITHUB_TOKEN }}
           tag: ${{ github.ref_name }}
-          name: SoCute ${{ github.ref_name }} (Log Tools Update)
-          body: |
-            **SoCute v2.3 (Utility Update)**
-            
-            🔧 **New Features & Fixes:**
-            - **Log Tools:** Added **Copy to Clipboard** and **Clear Logs** buttons for easier debugging.
-            - **Launch Stability:** Fixed SELinux crash issues (Toggle "Disable SELinux" in config).
-            - **Script Editor:** Now supports copy-paste actions natively.
-            - **Payload Logic:** Proxy config is now correctly injected before user scripts.
-            
-            ⚠️ **Tip:** If the app reboots on launch, make sure **"Disable SELinux"** is CHECKED.
+          name: SoCute ${{ github.ref_name }} (Cloud Engine)
           allowUpdates: true
           makeLatest: true
           removeArtifacts: true
