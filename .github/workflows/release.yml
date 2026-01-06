@@ -33,10 +33,9 @@ jobs:
           flutter create . --project-name socute --org com.socute
           flutter config --no-analytics
           
-          # INSTALL DEPENDENCIES (CLEAN LIST - STABLE)
+          # INSTALL DEPENDENCIES (CLEAN LIST)
           flutter pub add dio archive path_provider device_info_plus device_apps file_picker flutter_launcher_icons http shared_preferences
           
-          # Upgrade transitive dependencies to minimize conflicts
           flutter pub upgrade
 
       # --- GENERATE ICON ---
@@ -101,41 +100,51 @@ jobs:
       - name: Install Dart Dependencies
         run: flutter pub get
 
-      # --- COMPREHENSIVE GRADLE PATCH (THE FIX) ---
-      # This forces Aliyun Mirrors into both build.gradle AND settings.gradle
-      # This is crucial because modern Android plugins look in settings.gradle first.
-      - name: Force Aliyun Mirrors
+      # --- AGGRESSIVE DEEP PATCHING (PUB CACHE INCLUDED) ---
+      - name: Deep Patch Gradle Repositories
         run: |
           python3 -c "
           import os
 
-          # Define the mirrors
-          mirrors = '''
+          # Mirror configuration to inject
+          aliyun_repos = '''
               maven { url 'https://maven.aliyun.com/repository/google' }
               maven { url 'https://maven.aliyun.com/repository/public' }
               maven { url 'https://maven.aliyun.com/repository/gradle-plugin' }
           '''
 
-          files_to_patch = ['android/build.gradle', 'android/settings.gradle']
+          # Function to patch a file
+          def patch_gradle_file(path):
+              try:
+                  with open(path, 'r') as f: content = f.read()
+                  
+                  # Strategy: Replace standard repositories with Aliyun mirrors
+                  new_content = content
+                  if 'google()' in content:
+                      new_content = new_content.replace('google()', f'{aliyun_repos}\\n        google()')
+                  if 'mavenCentral()' in content:
+                      new_content = new_content.replace('mavenCentral()', f'{aliyun_repos}\\n        mavenCentral()')
+                  if 'gradlePluginPortal()' in content:
+                      new_content = new_content.replace('gradlePluginPortal()', f'{aliyun_repos}\\n        gradlePluginPortal()')
+                  
+                  if new_content != content:
+                      with open(path, 'w') as f: f.write(new_content)
+                      print(f'✅ Patched: {path}')
+              except Exception as e:
+                  print(f'❌ Failed to patch {path}: {e}')
 
-          for file_path in files_to_patch:
-              if os.path.exists(file_path):
-                  print(f'🔧 Patching {file_path}...')
-                  with open(file_path, 'r') as f: content = f.read()
-                  
-                  # 1. Replace google() with Aliyun Google Mirror
-                  content = content.replace('google()', f'{mirrors}\\n        google()')
-                  
-                  # 2. Replace mavenCentral() with Aliyun Public Mirror
-                  content = content.replace('mavenCentral()', f'{mirrors}\\n        mavenCentral()')
-                  
-                  # 3. Replace gradlePluginPortal() (Common in settings.gradle)
-                  content = content.replace('gradlePluginPortal()', f'{mirrors}\\n        gradlePluginPortal()')
+          # 1. Patch Project Gradle Files
+          patch_gradle_file('android/build.gradle')
+          patch_gradle_file('android/settings.gradle')
 
-                  with open(file_path, 'w') as f: f.write(content)
-                  print(f'✅ Successfully patched {file_path}')
-              else:
-                  print(f'⚠️  File not found: {file_path}')
+          # 2. Patch Plugin Gradle Files in Pub Cache (THE KEY FIX)
+          pub_cache = os.environ.get('PUB_CACHE', '/home/runner/.pub-cache')
+          print(f'🔍 Scanning Pub Cache at: {pub_cache}')
+          
+          for root, dirs, files in os.walk(pub_cache):
+              for file in files:
+                  if file == 'build.gradle':
+                      patch_gradle_file(os.path.join(root, file))
           "
 
       - name: Build Release APK
