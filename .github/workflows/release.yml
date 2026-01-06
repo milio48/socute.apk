@@ -1,4 +1,4 @@
-name: Build & Release SoCute v2.4
+name: Build & Release SoCute
 
 on:
   push:
@@ -33,9 +33,9 @@ jobs:
           flutter create . --project-name socute --org com.socute
           flutter config --no-analytics
           
-          # 2. Install Dependencies (UPDATED v2.4)
+          # 2. Install Dependencies
           # Added: http, shared_preferences
-          flutter pub add dio archive path_provider device_info_plus device_apps file_picker flutter_launcher_icons http shared_preferences
+          flutter pub add dio archive path_provider device_info_plus device_apps file_picker flutter_launcher_icons http shared_preferences code_text_field flutter_highlight
 
       # --- GENERATE ICON ---
       - name: Generate App Icon
@@ -68,7 +68,7 @@ jobs:
           if os.path.exists(manifest_path):
               os.remove(manifest_path)
           
-          # Manifest for v2.4 (Added READ_EXTERNAL_STORAGE)
+          
           manifest_content = \"\"\"<manifest xmlns:android='http://schemas.android.com/apk/res/android' package='com.socute.socute'>
               <uses-permission android:name='android.permission.INTERNET'/>
               <uses-permission android:name='android.permission.QUERY_ALL_PACKAGES'/>
@@ -99,7 +99,7 @@ jobs:
           
           with open(manifest_path, 'w') as f:
               f.write(manifest_content)
-          print('✅ AndroidManifest.xml updated for v2.4')
+          print('✅ AndroidManifest.xml')
           "
 
       - name: Install Dart Dependencies
@@ -109,15 +109,15 @@ jobs:
         run: flutter build apk --release --no-tree-shake-icons
 
       - name: Rename APK
-        run: mv build/app/outputs/flutter-apk/app-release.apk build/app/outputs/flutter-apk/socute-v2.4.apk
+        run: mv build/app/outputs/flutter-apk/app-release.apk build/app/outputs/flutter-apk/socute-${{ github.ref_name }}.apk
 
       - name: Create Release & Upload APK
         uses: ncipollo/release-action@v1
         with:
-          artifacts: "build/app/outputs/flutter-apk/socute-v2.4.apk"
+          artifacts: "build/app/outputs/flutter-apk/socute-${{ github.ref_name }}.apk"
           token: ${{ secrets.GITHUB_TOKEN }}
           tag: ${{ github.ref_name }}
-          name: SoCute ${{ github.ref_name }} (Cloud Engine)
+          name: SoCute ${{ github.ref_name }}
           allowUpdates: true
           makeLatest: true
           removeArtifacts: true
