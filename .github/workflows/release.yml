@@ -36,6 +36,7 @@ jobs:
           # 2. Install Dependencies
           # Added: http, shared_preferences
           flutter pub add dio archive path_provider device_info_plus device_apps file_picker flutter_launcher_icons http shared_preferences code_text_field flutter_highlight
+          flutter pub upgrade
 
       # --- GENERATE ICON ---
       - name: Generate App Icon
