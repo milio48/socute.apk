@@ -109,47 +109,31 @@ jobs:
       - name: Install Dart Dependencies
         run: flutter pub get
 
-      # --- CRITICAL FIX FOR 403 FORBIDDEN (DOUBLE PATCH) ---
-      # This step forces Aliyun Mirrors into both build.gradle AND settings.gradle
-      # to prevent Maven Central blocking on CI runners.
-      - name: Patch Gradle Repositories (Aliyun Mirror)
+      # --- ULTIMATE FIX FOR 403 FORBIDDEN ---
+      # Instead of patching individual files, we create a global init script
+      # that forces ALL Gradle connections (buildscript & project) to use Aliyun.
+      - name: Setup Global Gradle Mirror
         run: |
-          python3 -c "
-          import os
-
-          def patch_file(path):
-              if not os.path.exists(path):
-                  print(f'⚠️  Skipping {path} (File not found)')
-                  return
-
-              print(f'🔧 Patching {path}...')
-              with open(path, 'r') as f: content = f.read()
-
-              # Define Aliyun Mirrors
-              aliyun_google = 'maven { url \"https://maven.aliyun.com/repository/google\" }'
-              aliyun_public = 'maven { url \"https://maven.aliyun.com/repository/public\" }'
-              aliyun_plugins = 'maven { url \"https://maven.aliyun.com/repository/gradle-plugin\" }'
-
-              # Inject Mirrors BEFORE the standard repos
-              # 1. Google
-              if 'google()' in content and 'maven.aliyun.com' not in content:
-                  content = content.replace('google()', f'{aliyun_google}\n        google()')
-              
-              # 2. Maven Central
-              if 'mavenCentral()' in content:
-                  content = content.replace('mavenCentral()', f'{aliyun_public}\n        mavenCentral()')
-              
-              # 3. Gradle Plugin Portal (Common in settings.gradle)
-              if 'gradlePluginPortal()' in content:
-                   content = content.replace('gradlePluginPortal()', f'{aliyun_plugins}\n        gradlePluginPortal()')
-
-              with open(path, 'w') as f: f.write(content)
-              print(f'✅ Successfully patched {path}')
-
-          # Apply patch to both possible configuration files
-          patch_file('android/build.gradle')
-          patch_file('android/settings.gradle')
-          "
+          mkdir -p ~/.gradle
+          cat > ~/.gradle/init.gradle <<EOF
+          allprojects {
+              buildscript {
+                  repositories {
+                      maven { url "https://maven.aliyun.com/repository/public" }
+                      maven { url "https://maven.aliyun.com/repository/google" }
+                      maven { url "https://maven.aliyun.com/repository/gradle-plugin" }
+                      maven { url "https://maven.aliyun.com/repository/jcenter" }
+                  }
+              }
+              repositories {
+                  maven { url "https://maven.aliyun.com/repository/public" }
+                  maven { url "https://maven.aliyun.com/repository/google" }
+                  maven { url "https://maven.aliyun.com/repository/gradle-plugin" }
+                  maven { url "https://maven.aliyun.com/repository/jcenter" }
+              }
+          }
+          EOF
+          echo "✅ Created ~/.gradle/init.gradle. All traffic redirected to Aliyun."
 
       - name: Build Release APK
         run: flutter build apk --release --no-tree-shake-icons
