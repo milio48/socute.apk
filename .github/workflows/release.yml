@@ -33,9 +33,13 @@ jobs:
           flutter create . --project-name socute --org com.socute
           flutter config --no-analytics
           
-          # 2. Install Dependencies
-          # Added: http, shared_preferences
+          # 1. Install Dependencies
+          # We use 'flutter pub add' to inject packages into pubspec.yaml
           flutter pub add dio archive path_provider device_info_plus device_apps file_picker flutter_launcher_icons http shared_preferences code_text_field flutter_highlight
+          
+          # 2. Force Upgrade
+          # Crucial: This resolves conflicts with older packages (like device_apps)
+          # by pulling the latest compatible transitive dependencies.
           flutter pub upgrade
 
       # --- GENERATE ICON ---
@@ -69,7 +73,6 @@ jobs:
           if os.path.exists(manifest_path):
               os.remove(manifest_path)
           
-          
           manifest_content = \"\"\"<manifest xmlns:android='http://schemas.android.com/apk/res/android' package='com.socute.socute'>
               <uses-permission android:name='android.permission.INTERNET'/>
               <uses-permission android:name='android.permission.QUERY_ALL_PACKAGES'/>
@@ -100,11 +103,34 @@ jobs:
           
           with open(manifest_path, 'w') as f:
               f.write(manifest_content)
-          print('✅ AndroidManifest.xml')
+          print('✅ AndroidManifest.xml Updated')
           "
 
       - name: Install Dart Dependencies
         run: flutter pub get
+
+      # --- CRITICAL FIX FOR 403 FORBIDDEN ---
+      # This step replaces Google/MavenCentral with Aliyun Mirrors
+      - name: Patch Build Gradle (Fix 403 Forbidden)
+        run: |
+          python3 -c "
+          import os
+          path = 'android/build.gradle'
+          
+          if os.path.exists(path):
+              with open(path, 'r') as f: content = f.read()
+              
+              # Inject Aliyun Mirrors before standard repositories
+              # This bypasses the rate limiting from standard Maven Central
+              content = content.replace('google()', 'maven { url \"https://maven.aliyun.com/repository/google\" }\n        google()')
+              content = content.replace('mavenCentral()', 'maven { url \"https://maven.aliyun.com/repository/public\" }\n        mavenCentral()')
+              
+              with open(path, 'w') as f: f.write(content)
+              print('✅ Patched android/build.gradle with Aliyun Mirrors')
+          else:
+              print('❌ android/build.gradle not found!')
+              exit(1)
+          "
 
       - name: Build Release APK
         run: flutter build apk --release --no-tree-shake-icons
