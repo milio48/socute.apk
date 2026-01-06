@@ -33,11 +33,10 @@ jobs:
           flutter create . --project-name socute --org com.socute
           flutter config --no-analytics
           
-          # INSTALL DEPENDENCIES (CLEAN LIST)
-          # Removed: code_text_field, flutter_highlight
-          # Kept: http, shared_preferences (Required for v2.5 Logic)
+          # INSTALL DEPENDENCIES (CLEAN LIST - STABLE)
           flutter pub add dio archive path_provider device_info_plus device_apps file_picker flutter_launcher_icons http shared_preferences
           
+          # Upgrade transitive dependencies to minimize conflicts
           flutter pub upgrade
 
       # --- GENERATE ICON ---
@@ -46,7 +45,6 @@ jobs:
           python3 -c "
           import os
           import subprocess
-          
           if os.path.exists('icon.png'):
               print('Custom icon found!')
               config = \"\"\"
@@ -66,16 +64,13 @@ jobs:
         run: |
           python3 -c "
           import os
-          
           manifest_path = 'android/app/src/main/AndroidManifest.xml'
           if os.path.exists(manifest_path):
               os.remove(manifest_path)
-          
           manifest_content = \"\"\"<manifest xmlns:android='http://schemas.android.com/apk/res/android' package='com.socute.socute'>
               <uses-permission android:name='android.permission.INTERNET'/>
               <uses-permission android:name='android.permission.QUERY_ALL_PACKAGES'/>
               <uses-permission android:name='android.permission.READ_EXTERNAL_STORAGE'/> 
-              
               <application
                   android:label='SoCute'
                   android:name='\${applicationName}'
@@ -98,7 +93,6 @@ jobs:
                   <meta-data android:name='flutterEmbedding' android:value='2' />
               </application>
           </manifest>\"\"\"
-          
           with open(manifest_path, 'w') as f:
               f.write(manifest_content)
           print('✅ AndroidManifest.xml Updated')
@@ -107,20 +101,41 @@ jobs:
       - name: Install Dart Dependencies
         run: flutter pub get
 
-      # --- SIMPLE SAFETY PATCH ---
-      # Menjaga agar plugin tua (device_apps) tetap bisa jalan via Aliyun
-      - name: Patch Build Gradle
+      # --- COMPREHENSIVE GRADLE PATCH (THE FIX) ---
+      # This forces Aliyun Mirrors into both build.gradle AND settings.gradle
+      # This is crucial because modern Android plugins look in settings.gradle first.
+      - name: Force Aliyun Mirrors
         run: |
           python3 -c "
           import os
-          path = 'android/build.gradle'
-          if os.path.exists(path):
-              with open(path, 'r') as f: content = f.read()
-              # Inject Aliyun Mirror
-              content = content.replace('google()', 'maven { url \"https://maven.aliyun.com/repository/google\" }\n        google()')
-              content = content.replace('mavenCentral()', 'maven { url \"https://maven.aliyun.com/repository/public\" }\n        mavenCentral()')
-              with open(path, 'w') as f: f.write(content)
-              print('✅ Patched android/build.gradle with Aliyun')
+
+          # Define the mirrors
+          mirrors = '''
+              maven { url 'https://maven.aliyun.com/repository/google' }
+              maven { url 'https://maven.aliyun.com/repository/public' }
+              maven { url 'https://maven.aliyun.com/repository/gradle-plugin' }
+          '''
+
+          files_to_patch = ['android/build.gradle', 'android/settings.gradle']
+
+          for file_path in files_to_patch:
+              if os.path.exists(file_path):
+                  print(f'🔧 Patching {file_path}...')
+                  with open(file_path, 'r') as f: content = f.read()
+                  
+                  # 1. Replace google() with Aliyun Google Mirror
+                  content = content.replace('google()', f'{mirrors}\\n        google()')
+                  
+                  # 2. Replace mavenCentral() with Aliyun Public Mirror
+                  content = content.replace('mavenCentral()', f'{mirrors}\\n        mavenCentral()')
+                  
+                  # 3. Replace gradlePluginPortal() (Common in settings.gradle)
+                  content = content.replace('gradlePluginPortal()', f'{mirrors}\\n        gradlePluginPortal()')
+
+                  with open(file_path, 'w') as f: f.write(content)
+                  print(f'✅ Successfully patched {file_path}')
+              else:
+                  print(f'⚠️  File not found: {file_path}')
           "
 
       - name: Build Release APK
