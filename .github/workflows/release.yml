@@ -34,12 +34,9 @@ jobs:
           flutter config --no-analytics
           
           # 1. Install Dependencies
-          # We use 'flutter pub add' to inject packages into pubspec.yaml
           flutter pub add dio archive path_provider device_info_plus device_apps file_picker flutter_launcher_icons http shared_preferences code_text_field flutter_highlight
           
-          # 2. Force Upgrade
-          # Crucial: This resolves conflicts with older packages (like device_apps)
-          # by pulling the latest compatible transitive dependencies.
+          # 2. Force Upgrade (Fixes dependency conflicts)
           flutter pub upgrade
 
       # --- GENERATE ICON ---
@@ -63,7 +60,7 @@ jobs:
               subprocess.run(['flutter', 'pub', 'run', 'flutter_launcher_icons'], check=True)
           "
 
-      # --- MANIFEST UPDATE (With Storage Permission) ---
+      # --- MANIFEST UPDATE ---
       - name: Update AndroidManifest.xml
         run: |
           python3 -c "
@@ -109,9 +106,9 @@ jobs:
       - name: Install Dart Dependencies
         run: flutter pub get
 
-      # --- ULTIMATE FIX FOR 403 FORBIDDEN ---
-      # Instead of patching individual files, we create a global init script
-      # that forces ALL Gradle connections (buildscript & project) to use Aliyun.
+      # --- NUCLEAR FIX FOR 403 FORBIDDEN ---
+      # This creates a global configuration for the entire machine.
+      # It forces Gradle to use Aliyun Mirrors for EVERYTHING (plugins, libs, etc).
       - name: Setup Global Gradle Mirror
         run: |
           mkdir -p ~/.gradle
