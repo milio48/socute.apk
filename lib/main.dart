@@ -12,7 +12,7 @@ import 'package:device_apps/device_apps.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:file_picker/file_picker.dart';
 
-// --- NEW DEPENDENCIES FOR v2.5 ---
+// --- FIXED DEPENDENCIES API ---
 import 'package:code_text_field/code_text_field.dart';
 import 'package:flutter_highlight/themes/monokai-sublime.dart';
 import 'package:highlight/languages/javascript.dart';
@@ -153,7 +153,7 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
   late TabController _tabController; // For FIAU/FMU Tabs
   
   // Downloader Config
-  final TextEditingController _fridaVersionCtrl = TextEditingController(text: "17.5.2");
+  final TextEditingController _fridaVersionCtrl = TextEditingController(text: "16.1.4");
   String _selectedArch = "arm64"; 
   final List<String> _archOptions = ["arm64", "arm", "x86", "x86_64"];
 
@@ -431,7 +431,7 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
           }),
         ],
       ),
-      body: SingleChildScrollView( // Changed to ScrollView for long content
+      body: SingleChildScrollView( 
         child: Padding(
           padding: const EdgeInsets.all(12),
           child: Column(
@@ -448,7 +448,7 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
                 ),
               ),
 
-              // 2. SSL BYPASS TOGGLE (MASTER SWITCH)
+              // 2. SSL BYPASS TOGGLE
               SwitchListTile(
                 title: const Text("Enable SSL Bypass Mode", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
                 subtitle: const Text("Activate advanced interceptors (FIAU/FMU)", style: TextStyle(color: Colors.grey, fontSize: 11)),
@@ -459,7 +459,7 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
                 },
               ),
 
-              // 3. TABS AREA (Hidden if Toggle OFF)
+              // 3. TABS AREA
               AnimatedCrossFade(
                 firstChild: Container(),
                 secondChild: _buildTabsArea(),
@@ -467,13 +467,13 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
                 duration: const Duration(milliseconds: 300),
               ),
 
-              // 4. COMPOSER HEADER
+              // 4. COMPOSER
               const SizedBox(height: 15),
               const Text("Payload Composer", style: TextStyle(color: Colors.grey, fontSize: 12)),
               
               // 5. COMPOSER LIST
               Container(
-                height: 200, // Fixed height for list
+                height: 200,
                 decoration: BoxDecoration(color: Colors.grey[900], borderRadius: BorderRadius.circular(5), border: Border.all(color: Colors.white10)),
                 child: ReorderableListView(
                   padding: const EdgeInsets.all(5),
@@ -513,7 +513,7 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
                 ),
               ),
 
-              // 6. LAUNCH BUTTONS
+              // 6. LAUNCH
               SwitchListTile(
                 title: const Text("Disable SELinux", style: TextStyle(color: Colors.orangeAccent)),
                 subtitle: const Text("Anti-Crash for Android 13/14", style: TextStyle(color: Colors.grey, fontSize: 10)),
@@ -527,7 +527,7 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
                 child: Text(_isRunning ? "STOP INJECTION" : "LAUNCH", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
               ),
 
-              // 7. MAIN LOGS (SUPER LOG TOOLBAR)
+              // 7. MAIN LOGS
               const SizedBox(height: 20),
               _buildLogToolbar("Execution Logs", onCopy: () => Clipboard.setData(ClipboardData(text: _logs)), onClear: () => setState(() => _logs = ""), onViewPayload: _viewPayload, historyFile: _historyExecFile),
               Container(
@@ -583,7 +583,7 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
                 ),
               ),
 
-              // 10. BIG SPACER (40% Screen)
+              // 10. BIG SPACER
               SizedBox(height: MediaQuery.of(context).size.height * 0.4),
             ],
           ),
@@ -619,7 +619,7 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
             ),
           ),
           SizedBox(
-            height: 180, // Fixed height for Tab Content
+            height: 180, 
             child: TabBarView(
               controller: _tabController,
               children: [
@@ -869,7 +869,7 @@ class _ScriptManagerPageState extends State<ScriptManagerPage> {
   }
 }
 
-// --- NEW CODE EDITOR WITH HIGHLIGHTING ---
+// --- FIXED CODE EDITOR (Compatible with v1.1.0) ---
 class ScriptEditorPage extends StatefulWidget {
   final String storageDir;
   final File? fileToEdit;
@@ -890,10 +890,10 @@ class _ScriptEditorPageState extends State<ScriptEditorPage> {
       initialContent = widget.fileToEdit!.readAsStringSync();
     }
     
+    // REMOVED 'theme' param (Not supported in constructor for this version)
     _codeCtrl = CodeController(
       text: initialContent,
       language: javascript,
-      theme: monokaiSublimeTheme,
     );
   }
 
@@ -919,7 +919,8 @@ class _ScriptEditorPageState extends State<ScriptEditorPage> {
             child: CodeField(
               controller: _codeCtrl!,
               textStyle: const TextStyle(fontFamily: 'monospace', fontSize: 13),
-              gutterStyle: const GutterStyle(textStyle: TextStyle(color: Colors.grey, height: 1.5), width: 50, margin: 5),
+              // REMOVED 'gutterStyle' param
+              lineNumbers: true, // Used standard line numbers
             ),
           ),
         ),
@@ -933,7 +934,8 @@ class PayloadViewerDialog extends StatelessWidget {
   const PayloadViewerDialog({super.key, required this.code});
   @override
   Widget build(BuildContext context) {
-    final controller = CodeController(text: code, language: javascript, theme: monokaiSublimeTheme);
+    // REMOVED 'theme' param
+    final controller = CodeController(text: code, language: javascript);
     return Dialog(
       backgroundColor: Colors.black,
       insetPadding: const EdgeInsets.all(10),
@@ -948,7 +950,8 @@ class PayloadViewerDialog extends StatelessWidget {
                   controller: controller,
                   readOnly: true,
                   textStyle: const TextStyle(fontFamily: 'monospace', fontSize: 12),
-                  gutterStyle: const GutterStyle(textStyle: TextStyle(color: Colors.grey, height: 1.5), width: 50, margin: 5),
+                  // REMOVED 'gutterStyle' param
+                  lineNumbers: true,
                 ),
               ),
             ),
