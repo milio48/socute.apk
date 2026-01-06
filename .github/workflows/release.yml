@@ -33,13 +33,11 @@ jobs:
           flutter create . --project-name socute --org com.socute
           flutter config --no-analytics
           
-          # 1. Install Dependencies
-          # We use 'flutter pub add' to inject packages into pubspec.yaml
-          flutter pub add dio archive path_provider device_info_plus device_apps file_picker flutter_launcher_icons http shared_preferences code_text_field flutter_highlight
+          # INSTALL DEPENDENCIES (CLEAN LIST)
+          # Removed: code_text_field, flutter_highlight
+          # Kept: http, shared_preferences (Required for v2.5 Logic)
+          flutter pub add dio archive path_provider device_info_plus device_apps file_picker flutter_launcher_icons http shared_preferences
           
-          # 2. Force Upgrade
-          # Crucial: This resolves conflicts with older packages (like device_apps)
-          # by pulling the latest compatible transitive dependencies.
           flutter pub upgrade
 
       # --- GENERATE ICON ---
@@ -63,7 +61,7 @@ jobs:
               subprocess.run(['flutter', 'pub', 'run', 'flutter_launcher_icons'], check=True)
           "
 
-      # --- MANIFEST UPDATE (With Storage Permission) ---
+      # --- MANIFEST UPDATE ---
       - name: Update AndroidManifest.xml
         run: |
           python3 -c "
@@ -109,32 +107,21 @@ jobs:
       - name: Install Dart Dependencies
         run: flutter pub get
 
-      # --- NUCLEAR FIX FOR 403 FORBIDDEN ---
-      # This step creates a GLOBAL init script for Gradle.
-      # It forces ALL Gradle connections (plugins, libs, buildscript) to use Aliyun Mirrors.
-      # This completely bypasses Maven Central blocking issues on CI runners.
-      - name: Setup Global Gradle Mirror
+      # --- SIMPLE SAFETY PATCH ---
+      # Menjaga agar plugin tua (device_apps) tetap bisa jalan via Aliyun
+      - name: Patch Build Gradle
         run: |
-          mkdir -p ~/.gradle
-          cat > ~/.gradle/init.gradle <<EOF
-          allprojects {
-              buildscript {
-                  repositories {
-                      maven { url "https://maven.aliyun.com/repository/public" }
-                      maven { url "https://maven.aliyun.com/repository/google" }
-                      maven { url "https://maven.aliyun.com/repository/gradle-plugin" }
-                      maven { url "https://maven.aliyun.com/repository/jcenter" }
-                  }
-              }
-              repositories {
-                  maven { url "https://maven.aliyun.com/repository/public" }
-                  maven { url "https://maven.aliyun.com/repository/google" }
-                  maven { url "https://maven.aliyun.com/repository/gradle-plugin" }
-                  maven { url "https://maven.aliyun.com/repository/jcenter" }
-              }
-          }
-          EOF
-          echo "✅ Created ~/.gradle/init.gradle. All traffic redirected to Aliyun."
+          python3 -c "
+          import os
+          path = 'android/build.gradle'
+          if os.path.exists(path):
+              with open(path, 'r') as f: content = f.read()
+              # Inject Aliyun Mirror
+              content = content.replace('google()', 'maven { url \"https://maven.aliyun.com/repository/google\" }\n        google()')
+              content = content.replace('mavenCentral()', 'maven { url \"https://maven.aliyun.com/repository/public\" }\n        mavenCentral()')
+              with open(path, 'w') as f: f.write(content)
+              print('✅ Patched android/build.gradle with Aliyun')
+          "
 
       - name: Build Release APK
         run: flutter build apk --release --no-tree-shake-icons

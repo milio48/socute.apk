@@ -12,11 +12,6 @@ import 'package:device_apps/device_apps.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:file_picker/file_picker.dart';
 
-// --- FIXED DEPENDENCIES API ---
-import 'package:code_text_field/code_text_field.dart';
-import 'package:flutter_highlight/themes/monokai-sublime.dart';
-import 'package:highlight/languages/javascript.dart';
-
 // --- MAIN ENTRY POINT ---
 void main() {
   runApp(const MaterialApp(
@@ -869,7 +864,109 @@ class _ScriptManagerPageState extends State<ScriptManagerPage> {
   }
 }
 
-// --- FIXED CODE EDITOR (Compatible with v1.1.0) ---
+// ==========================================
+// MANUAL LINE NUMBER EDITOR (The Savior)
+// ==========================================
+class ManualLineNumberEditor extends StatefulWidget {
+  final TextEditingController controller;
+  final bool readOnly;
+  
+  const ManualLineNumberEditor({
+    super.key, 
+    required this.controller, 
+    this.readOnly = false
+  });
+
+  @override
+  State<ManualLineNumberEditor> createState() => _ManualLineNumberEditorState();
+}
+
+class _ManualLineNumberEditorState extends State<ManualLineNumberEditor> {
+  String _lineNumbers = "1";
+
+  @override
+  void initState() {
+    super.initState();
+    widget.controller.addListener(_updateLineNumbers);
+    // Initial calculation
+    _updateLineNumbers();
+  }
+
+  @override
+  void dispose() {
+    widget.controller.removeListener(_updateLineNumbers);
+    super.dispose();
+  }
+
+  void _updateLineNumbers() {
+    // Count newlines
+    int lines = widget.controller.text.split('\n').length;
+    // Generate string: "1\n2\n3..."
+    final buffer = StringBuffer();
+    for (int i = 1; i <= lines; i++) {
+      buffer.writeln(i);
+    }
+    
+    // Only update state if count changed to prevent flicker
+    if (buffer.toString().trim() != _lineNumbers.trim()) {
+      setState(() {
+        _lineNumbers = buffer.toString();
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      color: const Color(0xFF1E1E1E), // Editor Background
+      child: SingleChildScrollView(
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // LEFT COLUMN: Line Numbers
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 10),
+              color: const Color(0xFF2D2D2D), // Gutter Color
+              child: Text(
+                _lineNumbers,
+                textAlign: TextAlign.right,
+                style: const TextStyle(
+                  fontFamily: 'monospace',
+                  color: Colors.grey,
+                  fontSize: 13,
+                  height: 1.2, // Must match TextField strutStyle/height
+                ),
+              ),
+            ),
+            // RIGHT COLUMN: The Code Input
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 0),
+                child: TextField(
+                  controller: widget.controller,
+                  maxLines: null, // Expands vertically
+                  readOnly: widget.readOnly,
+                  style: const TextStyle(
+                    fontFamily: 'monospace',
+                    color: Colors.greenAccent, // Hacker style
+                    fontSize: 13,
+                    height: 1.2, // Critical for alignment
+                  ),
+                  decoration: const InputDecoration(
+                    border: InputBorder.none,
+                    contentPadding: EdgeInsets.only(top: 10, bottom: 10), // Match gutter vertical padding
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// --- EDITOR PAGE (Using ManualLineNumberEditor) ---
 class ScriptEditorPage extends StatefulWidget {
   final String storageDir;
   final File? fileToEdit;
@@ -879,22 +976,16 @@ class ScriptEditorPage extends StatefulWidget {
 }
 class _ScriptEditorPageState extends State<ScriptEditorPage> {
   final _nameCtrl = TextEditingController();
-  CodeController? _codeCtrl;
+  final _contentCtrl = TextEditingController();
 
   @override
   void initState() {
     super.initState();
-    String initialContent = "// Paste script here...";
+    _contentCtrl.text = "// Paste script here...";
     if (widget.fileToEdit != null) {
       _nameCtrl.text = widget.fileToEdit!.path.split('/').last;
-      initialContent = widget.fileToEdit!.readAsStringSync();
+      _contentCtrl.text = widget.fileToEdit!.readAsStringSync();
     }
-    
-    // REMOVED 'theme' param (Not supported in constructor for this version)
-    _codeCtrl = CodeController(
-      text: initialContent,
-      language: javascript,
-    );
   }
 
   void _save() {
@@ -902,7 +993,7 @@ class _ScriptEditorPageState extends State<ScriptEditorPage> {
     if (!name.endsWith(".js")) name += ".js";
     if (name.isEmpty || name == ".js") return;
     File f = File("${widget.storageDir}/scripts/$name");
-    f.writeAsStringSync(_codeCtrl!.text);
+    f.writeAsStringSync(_contentCtrl.text);
     Navigator.pop(context);
   }
 
@@ -914,15 +1005,8 @@ class _ScriptEditorPageState extends State<ScriptEditorPage> {
       body: Column(children: [
         Padding(padding: const EdgeInsets.all(8.0), child: TextField(controller: _nameCtrl, style: const TextStyle(color: Colors.white), decoration: const InputDecoration(labelText: "Filename", hintText: "myscript.js"))),
         Expanded(
-          child: CodeTheme(
-            data: CodeThemeData(styles: monokaiSublimeTheme),
-            child: CodeField(
-              controller: _codeCtrl!,
-              textStyle: const TextStyle(fontFamily: 'monospace', fontSize: 13),
-              // REMOVED 'gutterStyle' param
-              lineNumbers: true, // Used standard line numbers
-            ),
-          ),
+          // Use our custom widget
+          child: ManualLineNumberEditor(controller: _contentCtrl),
         ),
       ]),
     );
@@ -934,8 +1018,7 @@ class PayloadViewerDialog extends StatelessWidget {
   const PayloadViewerDialog({super.key, required this.code});
   @override
   Widget build(BuildContext context) {
-    // REMOVED 'theme' param
-    final controller = CodeController(text: code, language: javascript);
+    final controller = TextEditingController(text: code);
     return Dialog(
       backgroundColor: Colors.black,
       insetPadding: const EdgeInsets.all(10),
@@ -943,17 +1026,9 @@ class PayloadViewerDialog extends StatelessWidget {
         children: [
           AppBar(backgroundColor: Colors.grey[900], title: const Text("Payload Viewer"), leading: IconButton(icon: const Icon(Icons.close), onPressed: () => Navigator.pop(context))),
           Expanded(
-            child: CodeTheme(
-              data: CodeThemeData(styles: monokaiSublimeTheme),
-              child: SingleChildScrollView(
-                child: CodeField(
-                  controller: controller,
-                  readOnly: true,
-                  textStyle: const TextStyle(fontFamily: 'monospace', fontSize: 12),
-                  // REMOVED 'gutterStyle' param
-                  lineNumbers: true,
-                ),
-              ),
+            child: ManualLineNumberEditor(
+              controller: controller, 
+              readOnly: true
             ),
           ),
         ],
