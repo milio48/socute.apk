@@ -31,19 +31,20 @@ class ScriptItem {
   String description; // For UI display
 
   ScriptItem({
-    this.file, 
+    this.file,
     this.virtualType = "",
-    this.isVirtual = false, 
-    this.isChecked = true, 
+    this.isVirtual = false,
+    this.isChecked = true,
     required this.name,
     this.description = ""
   });
 }
 
-// --- ENGINE BUILDER (Dual Core v2.5) ---
+// --- ENGINE BUILDER (Dual Core v2.6) ---
 class SocuteEngineBuilder {
   static const String FIAU_FILENAME = "fiau_template.js";
   static const String FMU_FILENAME = "fmu_template.js";
+  static const String SOCKET_LOADER_ASSET = "socket_loader.js"; // New Asset
   
   static const String FIAU_URL = "https://raw.githubusercontent.com/milio48/socute.apk/refs/heads/main/fiau-by-httptoolkit.js";
   static const String FMU_URL = "https://raw.githubusercontent.com/milio48/socute.apk/refs/heads/main/fmu-by-akabe1.js"; 
@@ -114,6 +115,59 @@ class SocuteEngineBuilder {
     if (!await templateFile.exists()) return "// [ERROR] FMU Template missing. Update from Tab.";
     return await templateFile.readAsString();
   }
+
+  // [NEW] Load Socket Loader Code
+  static Future<String> getSocketLoaderScript() async {
+    try {
+      // Assuming socket_loader.js is bundled in flutter assets or created manually
+      // For now, we inject the raw string we discussed earlier if file is missing.
+      return await rootBundle.loadString('assets/$SOCKET_LOADER_ASSET');
+    } catch (e) {
+      // Fallback if asset missing (Safety Net)
+      return """
+      // [SOCUTE BACKUP LOADER]
+      (function() {
+          setTimeout(function() {
+              Java.perform(function() {
+                  console.log("[*] Initializing Backup Socket Loader...");
+                  try {
+                      var ServerSocket = Java.use("java.net.ServerSocket");
+                      var server = ServerSocket.\$new(0);
+                      var port = server.getLocalPort();
+                      console.log("[SOCUTE_HANDSHAKE::PORT::" + port + "]");
+                      
+                      var Thread = Java.use("java.lang.Thread");
+                      var Runnable = Java.registerClass({
+                          name: "com.socute.LoaderTask",
+                          implements: [Java.use("java.lang.Runnable")],
+                          methods: {
+                              run: function() {
+                                  try {
+                                      while(true) {
+                                          var client = server.accept();
+                                          var isr = Java.use("java.io.InputStreamReader").\$new(client.getInputStream());
+                                          var br = Java.use("java.io.BufferedReader").\$new(isr);
+                                          var line = "";
+                                          var full = "";
+                                          while((line = br.readLine()) != null) full += line + "\\n";
+                                          if(full.trim().length > 0) {
+                                              console.log("[*] Executing Runtime Payload...");
+                                              (1, eval)(full);
+                                          }
+                                          client.close();
+                                      }
+                                  } catch(e) { console.log("[!] Loader Error: " + e); }
+                              }
+                          }
+                      });
+                      Thread.\$new(Runnable.\$new()).start();
+                  } catch(e) { console.log("[!] Loader Start Failed: " + e); }
+              });
+          }, 1000);
+      })();
+      """;
+    }
+  }
 }
 
 // ==========================================
@@ -125,15 +179,19 @@ class LauncherPage extends StatefulWidget {
   State<LauncherPage> createState() => _LauncherPageState();
 }
 
-class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderStateMixin {
+class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   // Logs & Process
-  String _logs = "Initializing SoCute v2.5 (Mobile Pentest Station)...\n";
+  String _logs = "Initializing SoCute v2.6 (Anti-Reboot Engine)...\n";
   String _runtimeLogs = "";
   bool _isRunning = false;
   bool _isRuntimeRunning = false;
   Process? _mainProcess;
-  Process? _runtimeProcess;
+  // Note: _runtimeProcess removed because we use Socket now
   
+  // Runtime Connection Info
+  int? _runtimePort; 
+  bool _loaderConnected = false;
+
   // History Files
   File? _historyExecFile;
   File? _historyRuntimeFile;
@@ -148,7 +206,7 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
   late TabController _tabController; // For FIAU/FMU Tabs
   
   // Downloader Config
-  final TextEditingController _fridaVersionCtrl = TextEditingController(text: "16.1.4");
+  final TextEditingController _fridaVersionCtrl = TextEditingController(text: "17.5.2"); // Updated Default
   String _selectedArch = "arm64"; 
   final List<String> _archOptions = ["arm64", "arm", "x86", "x86_64"];
 
@@ -165,8 +223,28 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this); // For Auto-Restore SELinux on Exit
     _tabController = TabController(length: 2, vsync: this);
     WidgetsBinding.instance.addPostFrameCallback((_) => _initSystem());
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    if (_disableSELinux) _restoreSELinux(); // Safety Net
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.detached && _disableSELinux) {
+       _restoreSELinux();
+    }
+  }
+
+  Future<void> _restoreSELinux() async {
+      await Process.run('su', ['-c', 'setenforce 1']);
+      print("SELinux Restored (Safety)");
   }
 
   Future<void> _initSystem() async {
@@ -262,6 +340,24 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
   // --- LOGGING SYSTEM ---
   void _logMain(String text) {
     if (!mounted) return;
+    
+    // [V2.6] HANDSHAKE PARSER
+    // Detect Pattern: [SOCUTE_HANDSHAKE::PORT::12345]
+    if (text.contains("SOCUTE_HANDSHAKE::PORT::")) {
+        final regex = RegExp(r"SOCUTE_HANDSHAKE::PORT::(\d+)");
+        final match = regex.firstMatch(text);
+        if (match != null) {
+            final port = int.tryParse(match.group(1)!);
+            if (port != null) {
+                setState(() {
+                    _runtimePort = port;
+                    _loaderConnected = true;
+                });
+                text += "\n[✔] HYBRID LOADER CONNECTED ON PORT $port\n";
+            }
+        }
+    }
+
     String line = text.endsWith('\n') ? text : "$text\n";
     setState(() => _logs += line);
     _historyExecFile?.writeAsStringSync(line, mode: FileMode.append);
@@ -304,14 +400,19 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
     File binary = File("$_storageDir/frida-inject");
     if (!binary.existsSync()) { _logMain("[!] Binary missing. Download first."); return; }
 
-    setState(() { _isRunning = true; _logs = ""; });
+    setState(() { 
+        _isRunning = true; 
+        _logs = ""; 
+        _runtimePort = null; // Reset Handshake
+        _loaderConnected = false;
+    });
     _historyExecFile?.writeAsStringSync("\n=== NEW SESSION ===\n", mode: FileMode.append);
-    _logMain("=== STARTING INJECTION v2.5 ===");
+    _logMain("=== STARTING INJECTION v2.6 (HYBRID) ===");
 
     try {
       if (_disableSELinux) {
         await Process.run('su', ['-c', 'setenforce 0']);
-        _logMain("[*] SELinux Disabled.");
+        _logMain("[*] SELinux Disabled (Permissive Mode).");
       }
 
       File executable = File("$_internalDir/frida-bin");
@@ -324,6 +425,7 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
       var sink = payload.openWrite();
       int count = 0;
 
+      // 1. User Scripts
       for (var item in _scriptItems) {
         if (!item.isChecked) continue;
 
@@ -346,8 +448,14 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
           count++;
         }
       }
+
+      // 2. [V2.6] INJECT SOCKET LOADER (ALWAYS)
+      _logMain("[*] Injecting Hybrid Socket Loader...");
+      sink.writeln("\n// --- MODULE: SOCKET LOADER (SYSTEM) ---");
+      sink.writeln(await SocuteEngineBuilder.getSocketLoaderScript());
+
       await sink.close();
-      _logMain("[*] Merged $count modules into payload.js");
+      _logMain("[*] Merged $count modules + Loader into payload.js");
 
       // EXECUTE SPAWN
       _logMain("[*] Spawning $_targetPackage...");
@@ -370,36 +478,53 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
     }
   }
 
+  // [V2.6] REPLACEMENT: SOCKET INJECTOR
   Future<void> _injectRuntime() async {
     if (!_isRunning) { _logMain("[!] Start main injection first."); return; }
     if (_selectedRuntimeScript == null) { _logRuntime("[!] Select script first."); return; }
+    if (!_loaderConnected || _runtimePort == null) {
+        _logRuntime("[!] Hybrid Loader NOT connected yet. Wait for Handshake log.");
+        return;
+    }
     
     setState(() => _isRuntimeRunning = true);
-    _logRuntime("\n=== RUNTIME INJECT: ${_selectedRuntimeScript!.path.split('/').last} ===");
+    _logRuntime("\n=== RUNTIME INJECT (TCP): ${_selectedRuntimeScript!.path.split('/').last} ===");
     
     try {
-      File executable = File("$_internalDir/frida-bin");
-      String cmd = "${executable.path} -n $_targetPackage -s ${_selectedRuntimeScript!.path}";
+      // 1. Read Script
+      String scriptContent = await _selectedRuntimeScript!.readAsString();
+
+      // 2. Connect to Localhost Port
+      Socket socket = await Socket.connect('127.0.0.1', _runtimePort!);
       
-      _runtimeProcess = await Process.start('su', ['-c', cmd]);
+      // 3. Send Script
+      socket.write(scriptContent);
+      await socket.flush();
+      await socket.close();
+
+      _logRuntime("[OK] Script sent to loader!");
       
-      _runtimeProcess!.stdout.transform(utf8.decoder).listen((d) => _logRuntime(d.trim()));
-      _runtimeProcess!.stderr.transform(utf8.decoder).listen((d) => _logRuntime("[RT-ERR] ${d.trim()}"));
-      
-      _runtimeProcess!.exitCode.then((_) => setState(() => _isRuntimeRunning = false));
+      setState(() => _isRuntimeRunning = false);
       
     } catch (e) {
-      _logRuntime("[!] Runtime Failed: $e");
+      _logRuntime("[!] Socket Injection Failed: $e");
       setState(() => _isRuntimeRunning = false);
     }
   }
 
   void _stopSequence() async {
     _mainProcess?.kill();
-    _runtimeProcess?.kill();
+    // No runtime process to kill anymore
     await Process.run('su', ['-c', 'pkill -f frida-inject']);
-    if (mounted) setState(() { _isRunning = false; _isRuntimeRunning = false; _mainProcess = null; _runtimeProcess = null; });
-    _logMain("[*] All Processes Killed.");
+    
+    // [V2.6] SECURITY RESTORE
+    if (_disableSELinux) {
+        await _restoreSELinux();
+        _logMain("[*] Security Restored (SELinux Enforcing).");
+    }
+
+    if (mounted) setState(() { _isRunning = false; _isRuntimeRunning = false; _mainProcess = null; _runtimePort = null; _loaderConnected = false; });
+    _logMain("[*] Session Ended.");
   }
 
   void _viewPayload() async {
@@ -415,9 +540,19 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
     return Scaffold(
       backgroundColor: Colors.black,
       appBar: AppBar(
-        title: const Text("SoCute v2.5", style: TextStyle(fontWeight: FontWeight.bold)),
+        title: const Text("SoCute v2.6", style: TextStyle(fontWeight: FontWeight.bold)),
         backgroundColor: Colors.grey[900],
         actions: [
+          // Security Indicator
+          Container(
+             margin: const EdgeInsets.symmetric(vertical: 15),
+             padding: const EdgeInsets.symmetric(horizontal: 8),
+             decoration: BoxDecoration(
+                 color: _disableSELinux && _isRunning ? Colors.red : Colors.green,
+                 borderRadius: BorderRadius.circular(4)
+             ),
+             child: Text(_disableSELinux && _isRunning ? "PERMISSIVE" : "SECURE", style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold))
+          ),
           IconButton(icon: const Icon(Icons.info_outline), onPressed: _showAbout),
           IconButton(icon: const Icon(Icons.settings_ethernet), onPressed: () => showModalBottomSheet(context: context, builder: (c) => _buildDownloader(c))),
           IconButton(icon: const Icon(Icons.folder_open), onPressed: () {
@@ -510,8 +645,8 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
 
               // 6. LAUNCH
               SwitchListTile(
-                title: const Text("Disable SELinux", style: TextStyle(color: Colors.orangeAccent)),
-                subtitle: const Text("Anti-Crash for Android 13/14", style: TextStyle(color: Colors.grey, fontSize: 10)),
+                title: const Text("Disable SELinux (Session)", style: TextStyle(color: Colors.orangeAccent)),
+                subtitle: const Text("Auto-restore on stop. Required for Socket Loader.", style: TextStyle(color: Colors.grey, fontSize: 10)),
                 value: _disableSELinux, activeColor: Colors.orange,
                 contentPadding: EdgeInsets.zero,
                 onChanged: _isRunning ? null : (v) => setState(() => _disableSELinux = v),
@@ -519,12 +654,12 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
               ElevatedButton(
                 style: ElevatedButton.styleFrom(backgroundColor: _isRunning ? Colors.red[900] : Colors.greenAccent[700], padding: const EdgeInsets.symmetric(vertical: 15)),
                 onPressed: _isRunning ? _stopSequence : _launchSequence,
-                child: Text(_isRunning ? "STOP INJECTION" : "LAUNCH", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
+                child: Text(_isRunning ? "STOP SESSION" : "LAUNCH (HYBRID)", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
               ),
 
               // 7. MAIN LOGS
               const SizedBox(height: 20),
-              _buildLogToolbar("Execution Logs", onCopy: () => Clipboard.setData(ClipboardData(text: _logs)), onClear: () => setState(() => _logs = ""), onViewPayload: _viewPayload, historyFile: _historyExecFile),
+              _buildLogToolbar("System Logs", onCopy: () => Clipboard.setData(ClipboardData(text: _logs)), onClear: () => setState(() => _logs = ""), onViewPayload: _viewPayload, historyFile: _historyExecFile),
               Container(
                 height: 200,
                 width: double.infinity,
@@ -540,8 +675,17 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
               const Divider(color: Colors.white24, height: 40),
 
               // 9. RUNTIME INJECTOR
-              const Text("Runtime Injector", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-              const Text("Inject scripts into running app (Enum, Hook, Trace).", style: TextStyle(color: Colors.grey, fontSize: 11)),
+              Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                      const Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                          Text("Runtime Injector", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                          Text("Socket Mode (Safe)", style: TextStyle(color: Colors.grey, fontSize: 11)),
+                      ]),
+                      // Connection Status Indicator
+                      Icon(Icons.circle, color: _loaderConnected ? Colors.green : Colors.grey, size: 10),
+                  ],
+              ),
               const SizedBox(height: 10),
               Row(
                 children: [
@@ -557,7 +701,7 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
                   ),
                   const SizedBox(width: 10),
                   ElevatedButton(
-                    onPressed: _isRunning && !_isRuntimeRunning ? _injectRuntime : null,
+                    onPressed: _isRunning && !_isRuntimeRunning && _loaderConnected ? _injectRuntime : null,
                     style: ElevatedButton.styleFrom(backgroundColor: Colors.blueAccent),
                     child: _isRuntimeRunning 
                       ? const SizedBox(width: 15, height: 15, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2)) 
@@ -567,11 +711,12 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
               ),
               const SizedBox(height: 10),
               _buildLogToolbar("Runtime Output", onCopy: () => Clipboard.setData(ClipboardData(text: _runtimeLogs)), onClear: () => setState(() => _runtimeLogs = ""), historyFile: _historyRuntimeFile),
+              // [V2.6] New Style: Match Save Log Style
               Container(
                 height: 150,
                 width: double.infinity,
                 padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(color: Colors.black, border: Border.all(color: Colors.blue.withOpacity(0.3))),
+                decoration: BoxDecoration(color: Colors.black, border: Border.all(color: Colors.cyan.withOpacity(0.3))), // Cyan Border
                 child: SingleChildScrollView(
                   reverse: true,
                   child: SelectableText(_runtimeLogs, style: const TextStyle(color: Colors.cyanAccent, fontFamily: 'monospace', fontSize: 11)),
@@ -700,7 +845,8 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
                IconButton(icon: const Icon(Icons.save, color: Colors.purpleAccent, size: 18), onPressed: () => showDialog(context: context, builder: (_) => LogHistoryViewer(file: historyFile)), tooltip: "View History"),
             IconButton(icon: const Icon(Icons.copy, color: Colors.blue, size: 18), onPressed: onCopy),
             IconButton(icon: const Icon(Icons.delete_sweep, color: Colors.red, size: 18), onPressed: onClear),
-            IconButton(icon: const Icon(Icons.fullscreen, color: Colors.white, size: 18), onPressed: () => showDialog(context: context, builder: (c) => Dialog(backgroundColor: Colors.black, child: Stack(children: [SelectableText(_logs, style: const TextStyle(color: Colors.greenAccent, fontFamily: 'monospace')), Positioned(right: 0, top: 0, child: IconButton(icon: const Icon(Icons.close, color: Colors.white), onPressed: () => Navigator.pop(c)))])))),
+            // [V2.6] PADDING ADDED TO FULLSCREEN LOG
+            IconButton(icon: const Icon(Icons.fullscreen, color: Colors.white, size: 18), onPressed: () => showDialog(context: context, builder: (c) => Dialog(backgroundColor: Colors.black, child: Stack(children: [Padding(padding: EdgeInsets.all(20), child: SelectableText(_logs, style: const TextStyle(color: Colors.greenAccent, fontFamily: 'monospace'))), Positioned(right: 0, top: 0, child: IconButton(icon: const Icon(Icons.close, color: Colors.white), onPressed: () => Navigator.pop(c)))])))),
           ],
         )
       ],
@@ -712,19 +858,18 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
       context: context, 
       builder: (ctx) => AlertDialog(
         backgroundColor: Colors.grey[900],
-        title: const Row(children: [Icon(Icons.adb, color: Colors.green), SizedBox(width: 10), Text("About SoCute v2.5", style: TextStyle(color: Colors.white))]),
+        title: const Row(children: [Icon(Icons.adb, color: Colors.green), SizedBox(width: 10), Text("About SoCute v2.6", style: TextStyle(color: Colors.white))]),
         content: const SingleChildScrollView(
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text("Mobile Pentest Station", style: TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold)),
+              Text("Anti-Reboot Edition", style: TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold)),
               SizedBox(height: 10),
-              Text("Credits:", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-              Text("• FIAU Script: github.com/httptoolkit", style: TextStyle(color: Colors.grey)),
-              Text("• FMU Script: codeshare.frida.re/@akabe1", style: TextStyle(color: Colors.grey)),
-              Text("• Frida Core: frida.re", style: TextStyle(color: Colors.grey)),
-              Text("• Built by: Milio48", style: TextStyle(color: Colors.grey)),
+              Text("Features:", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+              Text("• Hybrid Socket Loader (No Ptrace)", style: TextStyle(color: Colors.grey)),
+              Text("• Auto SELinux Management", style: TextStyle(color: Colors.grey)),
+              Text("• Safe Runtime Injection", style: TextStyle(color: Colors.grey)),
               SizedBox(height: 10),
               Text("License: AGPL-3.0", style: TextStyle(color: Colors.orangeAccent)),
             ],
@@ -759,7 +904,7 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
 }
 
 // ==========================================
-// DIALOGS & MANAGERS
+// DIALOGS & MANAGERS (No Changes)
 // ==========================================
 
 class ConfigDialog extends StatefulWidget {
@@ -888,7 +1033,6 @@ class _ManualLineNumberEditorState extends State<ManualLineNumberEditor> {
   void initState() {
     super.initState();
     widget.controller.addListener(_updateLineNumbers);
-    // Initial calculation
     _updateLineNumbers();
   }
 
@@ -899,15 +1043,11 @@ class _ManualLineNumberEditorState extends State<ManualLineNumberEditor> {
   }
 
   void _updateLineNumbers() {
-    // Count newlines
     int lines = widget.controller.text.split('\n').length;
-    // Generate string: "1\n2\n3..."
     final buffer = StringBuffer();
     for (int i = 1; i <= lines; i++) {
       buffer.writeln(i);
     }
-    
-    // Only update state if count changed to prevent flicker
     if (buffer.toString().trim() != _lineNumbers.trim()) {
       setState(() {
         _lineNumbers = buffer.toString();
@@ -918,44 +1058,29 @@ class _ManualLineNumberEditorState extends State<ManualLineNumberEditor> {
   @override
   Widget build(BuildContext context) {
     return Container(
-      color: const Color(0xFF1E1E1E), // Editor Background
+      color: const Color(0xFF1E1E1E),
       child: SingleChildScrollView(
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // LEFT COLUMN: Line Numbers
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 10),
-              color: const Color(0xFF2D2D2D), // Gutter Color
+              color: const Color(0xFF2D2D2D),
               child: Text(
                 _lineNumbers,
                 textAlign: TextAlign.right,
-                style: const TextStyle(
-                  fontFamily: 'monospace',
-                  color: Colors.grey,
-                  fontSize: 13,
-                  height: 1.2, // Must match TextField strutStyle/height
-                ),
+                style: const TextStyle(fontFamily: 'monospace', color: Colors.grey, fontSize: 13, height: 1.2),
               ),
             ),
-            // RIGHT COLUMN: The Code Input
             Expanded(
               child: Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 0),
                 child: TextField(
                   controller: widget.controller,
-                  maxLines: null, // Expands vertically
+                  maxLines: null,
                   readOnly: widget.readOnly,
-                  style: const TextStyle(
-                    fontFamily: 'monospace',
-                    color: Colors.greenAccent, // Hacker style
-                    fontSize: 13,
-                    height: 1.2, // Critical for alignment
-                  ),
-                  decoration: const InputDecoration(
-                    border: InputBorder.none,
-                    contentPadding: EdgeInsets.only(top: 10, bottom: 10), // Match gutter vertical padding
-                  ),
+                  style: const TextStyle(fontFamily: 'monospace', color: Colors.greenAccent, fontSize: 13, height: 1.2),
+                  decoration: const InputDecoration(border: InputBorder.none, contentPadding: EdgeInsets.only(top: 10, bottom: 10)),
                 ),
               ),
             ),
@@ -966,7 +1091,7 @@ class _ManualLineNumberEditorState extends State<ManualLineNumberEditor> {
   }
 }
 
-// --- EDITOR PAGE (Using ManualLineNumberEditor) ---
+// --- EDITOR PAGE ---
 class ScriptEditorPage extends StatefulWidget {
   final String storageDir;
   final File? fileToEdit;
@@ -1005,7 +1130,6 @@ class _ScriptEditorPageState extends State<ScriptEditorPage> {
       body: Column(children: [
         Padding(padding: const EdgeInsets.all(8.0), child: TextField(controller: _nameCtrl, style: const TextStyle(color: Colors.white), decoration: const InputDecoration(labelText: "Filename", hintText: "myscript.js"))),
         Expanded(
-          // Use our custom widget
           child: ManualLineNumberEditor(controller: _contentCtrl),
         ),
       ]),
