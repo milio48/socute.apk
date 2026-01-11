@@ -336,19 +336,14 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
 
       // [CORE] ROBUST LOG SPLITTER
       // Menggunakan LineSplitter agar output panjang tidak terpotong
-      _mainProcess!.stdout
-        .transform(utf8.decoder)
-        .transform(const LineSplitter())
-        .listen((line) {
-             if (line.trim().isEmpty) return;
-             if (line.contains("[RT]")) {
-                // Log Runtime (Clean tag)
-                String clean = line.replaceAll("[RT]", "").trim();
-                _logRuntime(clean);
-             } else {
-                // Log System
-                _logMain(line);
-             }
+      _mainProcess!.stdout.transform(utf8.decoder).listen((data) {
+          // Cetak mentah-mentah ke log utama biar kita lihat apa yang terjadi
+          _logMain("[RAW] " + data);
+          
+          // Tetap coba parsing sederhana jika mau
+          if (data.contains("[RT]")) {
+             _logRuntime(data); // Sekedar copy, jangan dipotong dulu
+          }
       });
       
       _mainProcess!.stderr.transform(utf8.decoder).listen((d) => _logMain("[ERR] ${d.trim()}"));
@@ -365,66 +360,22 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
 
   // [CORE] RUNTIME INJECT VIA STDIN (Base64 + Logger Shim)
   Future<void> _injectRuntime() async {
-    if (!_isRunning || _mainProcess == null) { _logMain("[!] Error: Session not active."); return; }
-    if (_selectedRuntimeScript == null) { _logRuntime("[!] Select script first."); return; }
-
+    if (!_isRunning || _mainProcess == null) return;
+    
     setState(() => _isRuntimeRunning = true);
-    _logRuntime("\n>>> INJECTING: ${_selectedRuntimeScript!.path.split('/').last}");
+    _logRuntime(">>> SENDING RAW TEST...");
 
     try {
-      String rawCode = await _selectedRuntimeScript!.readAsString();
-      String b64Code = base64Encode(utf8.encode(rawCode));
-
-      // WRAPPER dengan ADVANCED LOGGER SHIM & FORMATTER
-      String wrapper = '''
-(function() {
-    try {
-        if (!globalThis.hasShim) {
-            var _l = console.log;
-            var _e = console.error;
-
-            // Helper for objects/arrays
-            function fmt(args) {
-                var items = [];
-                for(var i=0; i<args.length; i++) {
-                    var a = args[i];
-                    if (typeof a === 'object' && a !== null) {
-                        try { items.push(JSON.stringify(a)); } catch(e){ items.push(a.toString()); }
-                    } else { items.push(a); }
-                }
-                return items.join(" ");
-            }
-
-            console.log = function() { _l("[RT] " + fmt(arguments)); };
-            console.error = function() { _e("[RT] [ERR] " + fmt(arguments)); };
-            globalThis.hasShim = true;
-        }
-
-        var b64 = "$b64Code";
-        var dec = "";
-        if (typeof atob === 'function') {
-            dec = atob(b64);
-        } else {
-            var B = Java.use("android.util.Base64");
-            var b = B.decode(b64, 0);
-            var S = Java.use("java.lang.String");
-            dec = S.\$new(b).toString();
-        }
-        
-        console.log("Executing " + dec.length + " bytes...");
-        (1, eval)(dec);
-        
-    } catch(e) { console.error("STDIN FAIL: " + e); }
-})();
-''';
-      // Flatten to one line for stdin
-      String oneLiner = wrapper.replaceAll('\n', ' ');
+      // KIRIM LANGSUNG TANPA WRAPPER, TANPA BASE64
+      // Kita tes apakah pipanya nyambung.
+      String testCode = 'console.log("[RT] HELLO FROM STDIN");';
       
-      _mainProcess!.stdin.writeln(oneLiner);
+      _mainProcess!.stdin.writeln(testCode);
       await _mainProcess!.stdin.flush();
       
+      _logRuntime("[OK] Sent.");
     } catch (e) {
-      _logRuntime("[!] Injection Failed: $e");
+      _logRuntime("[!] Error: $e");
     } finally {
       setState(() => _isRuntimeRunning = false);
     }
