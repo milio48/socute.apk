@@ -136,7 +136,7 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
   late TabController _tabController;
   
   // Downloader
-  final TextEditingController _fridaVersionCtrl = TextEditingController(text: "16.1.4");
+  final TextEditingController _fridaVersionCtrl = TextEditingController(text: "17.5.2");
   String _selectedArch = "arm64";
   String _hostCpu = "Unknown";
   final List<String> _archOptions = ["arm64", "arm", "x86", "x86_64"];
@@ -273,6 +273,7 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
   }
 
   // --- LAUNCH LOGIC (v2.6.2 - Interactive & Robust Splitter) ---
+  // --- LAUNCH LOGIC (Interactive Shell Wrapper) ---
   Future<void> _launchSequence() async {
     if (_targetPackage.isEmpty) { _logMain("[!] Select target app first!"); return; }
     File binary = File("$_storageDir/frida-inject");
@@ -282,19 +283,16 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
        var res = await Process.run('su', ['-c', 'pidof $_targetPackage']);
        if (res.stdout.toString().trim().isNotEmpty) {
          _logMain("[!] WARNING: $_targetPackage is already running.");
-         _logMain("[*] Recommended: Force Stop app first.");
        }
     } catch(e) {}
 
-    // SELinux Notification
     if (!_selinuxPermissive) {
       _logMain("[!] WARNING: SELinux is ENFORCING.");
-      _logMain("[*] Please turn OFF SELinux for best stability.");
     }
 
     setState(() { _isRunning = true; _logs = ""; });
     _historyExecFile?.writeAsStringSync("\n=== NEW SESSION ===\n", mode: FileMode.append);
-    _logMain("=== STARTING INJECTION v2.6.2 (STDIN) ===");
+    _logMain("=== STARTING INJECTION v2.6.2 (SHELL MODE) ===");
 
     try {
       File executable = File("$_internalDir/frida-bin");
@@ -304,17 +302,19 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
 
       File payload = File("$_internalDir/payload.js");
       var sink = payload.openWrite();
+      // ... (Bagian Merge Script SAMA SAJA, tidak saya tulis ulang biar hemat tempat) ...
+      // ... (Pastikan looping _scriptItems tetap ada di sini) ...
+      // --- Mulai Paste Script Item Loop ---
       int count = 0;
-
       for (var item in _scriptItems) {
         if (!item.isChecked) continue;
         if (item.isVirtual) {
           if (item.virtualType == "fiau") {
-             if (!_fiauReady) { _logMain("[!] Skipped FIAU: Missing."); continue; }
+             if (!_fiauReady) continue;
              sink.writeln("\n// --- MODULE: FIAU ---");
              sink.writeln(await SocuteEngineBuilder.generateFiauScript());
           } else if (item.virtualType == "fmu") {
-             if (!_fmuReady) { _logMain("[!] Skipped FMU: Missing."); continue; }
+             if (!_fmuReady) continue;
              sink.writeln("\n// --- MODULE: FMU ---");
              sink.writeln(await SocuteEngineBuilder.generateFmuScript());
           }
@@ -325,31 +325,38 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
           count++;
         }
       }
+      // --- Akhir Paste Script Item Loop ---
       await sink.close();
       _logMain("[*] Merged $count modules.");
 
-      _logMain("[*] Spawning $_targetPackage (STDIN Mode)...");
-      // [CORE] Interactive Mode (-i)
-      String cmd = "${executable.path} -f $_targetPackage -s ${payload.path} -i";
+      _logMain("[*] Opening Root Shell...");
       
-      _mainProcess = await Process.start('su', ['-c', cmd]);
+      // 1. JALANKAN SHELL KOSONG
+      _mainProcess = await Process.start('su', []);
 
-      // [CORE] ROBUST LOG SPLITTER
-      // Menggunakan LineSplitter agar output panjang tidak terpotong
+      // 2. SETUP RAW LISTENER (DEBUG MODE)
+      // Kita lihat semua output mentah dari shell
       _mainProcess!.stdout.transform(utf8.decoder).listen((data) {
-          // Cetak mentah-mentah ke log utama biar kita lihat apa yang terjadi
-          _logMain("[RAW] " + data);
+          // Log ke System
+          _logMain(data.trim()); 
           
-          // Tetap coba parsing sederhana jika mau
+          // Log ke Runtime jika ada tag [RT]
+          // (Kita pakai cara bodoh dulu: contains)
           if (data.contains("[RT]")) {
-             _logRuntime(data); // Sekedar copy, jangan dipotong dulu
+             _logRuntime(data);
           }
       });
-      
       _mainProcess!.stderr.transform(utf8.decoder).listen((d) => _logMain("[ERR] ${d.trim()}"));
+
+      // 3. KETIK COMMAND FRIDA KE DALAM SHELL
+      String cmd = "${executable.path} -f $_targetPackage -s ${payload.path} -i";
+      _logMain("[*] Sending command to shell: $cmd");
+      
+      _mainProcess!.stdin.writeln(cmd);
+      await _mainProcess!.stdin.flush();
       
       _mainProcess!.exitCode.then((code) {
-        if (_isRunning) { _logMain("[!] Process terminated: $code"); _stopSequence(); }
+        if (_isRunning) { _logMain("[!] Shell terminated: $code"); _stopSequence(); }
       });
 
     } catch (e) {
