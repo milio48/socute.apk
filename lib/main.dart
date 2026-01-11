@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'dart:convert';
 import 'dart:async';
+import 'dart:typed_data'; // Tambahkan ini untuk Uint8List
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:dio/dio.dart';
@@ -11,7 +12,7 @@ import 'package:device_info_plus/device_info_plus.dart';
 import 'package:device_apps/device_apps.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:file_picker/file_picker.dart';
-import 'package:pty/pty.dart'; // [CORE] Wajib ada untuk Runtime Inject
+import 'package:pty/pty.dart'; // [CORE] PTY Library
 
 // --- MAIN ENTRY POINT ---
 void main() {
@@ -188,7 +189,7 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
 
       // Detect Host CPU
       var androidInfo = await DeviceInfoPlugin().androidInfo;
-      // [FIX] Gunakan .first.toString() agar aman dari null error di device_info_plus terbaru
+      // [FIX] Gunakan .first.toString() agar aman dari null error
       var abi = androidInfo.supportedAbis.first.toString().toLowerCase();
       
       _hostCpu = abi;
@@ -334,17 +335,15 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
 
       _logMain("[*] Allocating Pseudo-Terminal (PTY)...");
       
-      // [CORE] PTY START
-      // Kita jalankan 'su' di dalam terminal palsu.
+      // [CORE] PTY START (FIX: Tanpa blocking parameter)
       _mainPty = PseudoTerminal.start(
         'su', 
         [], 
-        blocking: false 
       );
 
       // Listen Output dari PTY (Stream<Uint8List>)
       _mainPty!.out
-        .cast<List<int>>() // [FIX] Cast ke List<int> agar Utf8Decoder tidak error
+        .cast<List<int>>() // [FIX] Cast ke List<int> wajib untuk Utf8Decoder
         .transform(utf8.decoder)
         .transform(const LineSplitter())
         .listen((line) {
