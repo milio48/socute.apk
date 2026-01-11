@@ -188,7 +188,9 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
 
       // Detect Host CPU
       var androidInfo = await DeviceInfoPlugin().androidInfo;
-      var abi = androidInfo.supportedAbis[0].toLowerCase();
+      // [FIX] Gunakan .first.toString() agar aman dari null error di device_info_plus terbaru
+      var abi = androidInfo.supportedAbis.first.toString().toLowerCase();
+      
       _hostCpu = abi;
       if (abi.contains("x86_64")) _selectedArch = "x86_64";
       else if (abi.contains("x86")) _selectedArch = "x86";
@@ -334,15 +336,15 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
       
       // [CORE] PTY START
       // Kita jalankan 'su' di dalam terminal palsu.
-      // Frida akan melihat ini sebagai Terminal Asli, jadi flag -i akan bekerja.
       _mainPty = PseudoTerminal.start(
         'su', 
         [], 
-        blocking: false
+        blocking: false 
       );
 
       // Listen Output dari PTY (Stream<Uint8List>)
       _mainPty!.out
+        .cast<List<int>>() // [FIX] Cast ke List<int> agar Utf8Decoder tidak error
         .transform(utf8.decoder)
         .transform(const LineSplitter())
         .listen((line) {

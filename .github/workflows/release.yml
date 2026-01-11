@@ -34,7 +34,7 @@ jobs:
           flutter config --no-analytics
           
           # INSTALL DEPENDENCIES (CLEAN LIST)
-          flutter pub add dio archive path_provider device_info_plus device_apps file_picker flutter_launcher_icons http shared_preferences pty
+          flutter pub add dio archive path_provider device_info_plus device_apps file_picker flutter_launcher_icons http shared_preferences "pty:^0.4.0"
           
           flutter pub upgrade
 
