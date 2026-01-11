@@ -40,11 +40,10 @@ class ScriptItem {
   });
 }
 
-// --- ENGINE BUILDER (v2.6.1 File Watcher Edition) ---
+// --- ENGINE BUILDER (v2.6.2 STDIN Edition) ---
 class SocuteEngineBuilder {
   static const String FIAU_FILENAME = "fiau_template.js";
   static const String FMU_FILENAME = "fmu_template.js";
-  
   static const String FIAU_URL = "https://raw.githubusercontent.com/milio48/socute.apk/refs/heads/main/fiau-by-httptoolkit.js";
   static const String FMU_URL = "https://raw.githubusercontent.com/milio48/socute.apk/refs/heads/main/fmu-by-akabe1.js"; 
 
@@ -62,10 +61,9 @@ class SocuteEngineBuilder {
     final response = await http.get(Uri.parse(url));
     if (response.statusCode == 200) {
       final dir = await getApplicationDocumentsDirectory();
-      final file = File("${dir.path}/$filename");
-      await file.writeAsString(response.body);
+      await File("${dir.path}/$filename").writeAsString(response.body);
     } else {
-      throw Exception("Failed to download script: HTTP ${response.statusCode}");
+      throw Exception("HTTP ${response.statusCode}");
     }
   }
 
@@ -105,76 +103,10 @@ class SocuteEngineBuilder {
     if (!await templateFile.exists()) return "// [ERROR] FMU Template missing.";
     return await templateFile.readAsString();
   }
-
-  // [CORE v2.6.1] File Watcher JS Payload
-  static String getFileWatcherScript() {
-    return r'''
-/* SOCUTE v2.6.1 - FILE WATCHER LOADER */
-(function() {
-    setTimeout(function() {
-        Java.perform(function() {
-            var File = Java.use("java.io.File");
-            var FileInputStream = Java.use("java.io.FileInputStream");
-            var BufferedReader = Java.use("java.io.BufferedReader");
-            var InputStreamReader = Java.use("java.io.InputStreamReader");
-            var Thread = Java.use("java.lang.Thread");
-            
-            var TARGET_DIR = "/data/local/tmp/socute/";
-            var TARGET_FILE = "runtime.js";
-            var FULL_PATH = TARGET_DIR + TARGET_FILE;
-            
-            console.log("[*] SC-WATCHER: Monitoring " + FULL_PATH);
-
-            function checkAndExecute() {
-                var fileObj = File.$new(FULL_PATH);
-                if (fileObj.exists() && fileObj.isFile() && fileObj.canRead()) {
-                    console.log("[*] SC-WATCHER: Payload detected!");
-                    var payload = "";
-                    var success = false;
-                    try {
-                        var fis = FileInputStream.$new(fileObj);
-                        var br = BufferedReader.$new(InputStreamReader.$new(fis));
-                        var line = "";
-                        while ((line = br.readLine()) != null) payload += line + "\n";
-                        br.close(); fis.close();
-                        success = true;
-                    } catch (e) { console.error("[!] Read Error: " + e); }
-
-                    try { fileObj.delete(); } catch(e) {} // Always delete
-
-                    if (success && payload.trim().length > 0) {
-                        console.log("[*] SC-WATCHER: Executing...");
-                        Script.nextTick(function() {
-                            try { (1, eval)(payload); } catch(e) { console.error("[!] Script Error: " + e.stack); }
-                        });
-                    }
-                }
-            }
-
-            var WatcherTask = Java.registerClass({
-                name: "com.socute.WatcherTask",
-                implements: [Java.use("java.lang.Runnable")],
-                methods: {
-                    run: function() {
-                        try {
-                            while (true) {
-                                checkAndExecute();
-                                Thread.sleep(1000); // 1 sec poll
-                            }
-                        } catch (e) { console.error("[!] Watcher Died: " + e); }
-                    }
-                }
-            });
-            Thread.$new(WatcherTask.$new()).start();
-        });
-    }, 1000);
-})();
-''';
-  }
 }
 
 // ==========================================
-// PAGE 1: LAUNCHER (THE COCKPIT)
+// PAGE 1: LAUNCHER
 // ==========================================
 class LauncherPage extends StatefulWidget {
   const LauncherPage({super.key});
@@ -184,7 +116,7 @@ class LauncherPage extends StatefulWidget {
 
 class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   // Logs & Process
-  String _logs = "Initializing SoCute v2.6.1 (File Watcher Edition)...\n";
+  String _logs = "Initializing SoCute v2.6.2 (STDIN Edition)...\n";
   String _runtimeLogs = "";
   bool _isRunning = false;
   bool _isRuntimeRunning = false;
@@ -199,12 +131,12 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
   String _targetName = "Select Target App";
 
   // Configs
-  bool _selinuxPermissive = false; // State from getenforce
+  bool _selinuxPermissive = false; 
   bool _sslBypassMode = false; 
   late TabController _tabController;
   
-  // Downloader Config
-  final TextEditingController _fridaVersionCtrl = TextEditingController(text: "17.5.2");
+  // Downloader
+  final TextEditingController _fridaVersionCtrl = TextEditingController(text: "16.1.4");
   String _selectedArch = "arm64";
   String _hostCpu = "Unknown";
   final List<String> _archOptions = ["arm64", "arm", "x86", "x86_64"];
@@ -235,9 +167,7 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) {
-      _checkSELinux(); // Re-check on resume
-    }
+    if (state == AppLifecycleState.resumed) _checkSELinux();
   }
 
   Future<void> _initSystem() async {
@@ -246,7 +176,6 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
       final intDir = await getApplicationSupportDirectory();
       _storageDir = extDir!.path;
       _internalDir = intDir.path;
-
       await Directory("$_storageDir/scripts").create(recursive: true);
       
       _historyExecFile = File("$_internalDir/history_exec.log");
@@ -254,38 +183,26 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
       if (!_historyExecFile!.existsSync()) _historyExecFile!.createSync();
       if (!_historyRuntimeFile!.existsSync()) _historyRuntimeFile!.createSync();
 
-      // Host CPU & Arch
+      // Detect Host CPU
       var androidInfo = await DeviceInfoPlugin().androidInfo;
       var abi = androidInfo.supportedAbis[0].toLowerCase();
       _hostCpu = abi;
-      String detected = "arm64";
-      if (abi.contains("x86_64")) detected = "x86_64";
-      else if (abi.contains("x86")) detected = "x86";
-      else if (abi.contains("arm") && !abi.contains("64")) detected = "arm";
-      setState(() => _selectedArch = detected);
-
-      // [CORE] Setup Workspace
-      await Process.run('su', ['-c', 'mkdir -p /data/local/tmp/socute/']);
-      await Process.run('su', ['-c', 'chmod 777 /data/local/tmp/socute/']);
+      if (abi.contains("x86_64")) _selectedArch = "x86_64";
+      else if (abi.contains("x86")) _selectedArch = "x86";
+      else if (abi.contains("arm") && !abi.contains("64")) _selectedArch = "arm";
+      setState(() {});
 
       await _checkSELinux();
       await _checkEngineStatus();
       await _refreshScripts();
-    } catch (e) {
-      _logMain("[!] Init Error: $e");
-    }
+    } catch (e) { _logMain("[!] Init Error: $e"); }
   }
 
   Future<void> _checkSELinux() async {
     try {
       var res = await Process.run('su', ['-c', 'getenforce']);
-      String status = res.stdout.toString().trim();
-      setState(() {
-        _selinuxPermissive = (status.toLowerCase() == "permissive");
-      });
-    } catch (e) {
-      _logMain("[!] SELinux Check Failed: $e");
-    }
+      setState(() => _selinuxPermissive = (res.stdout.toString().trim().toLowerCase() == "permissive"));
+    } catch (e) { _logMain("[!] SELinux Check Failed: $e"); }
   }
 
   Future<void> _toggleSELinux() async {
@@ -355,32 +272,29 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
     } catch (e) { _logMain("[!] Download Failed: $e"); }
   }
 
-  // --- LAUNCH LOGIC v2.6.1 ---
+  // --- LAUNCH LOGIC (v2.6.2 - Interactive & Robust Splitter) ---
   Future<void> _launchSequence() async {
     if (_targetPackage.isEmpty) { _logMain("[!] Select target app first!"); return; }
     File binary = File("$_storageDir/frida-inject");
     if (!binary.existsSync()) { _logMain("[!] Binary missing. Download first."); return; }
 
-    // [CORE] Check Process
     try {
        var res = await Process.run('su', ['-c', 'pidof $_targetPackage']);
        if (res.stdout.toString().trim().isNotEmpty) {
-         _logMain("[!] ABORT: $_targetPackage is already running!");
-         _logMain("[*] Please Force Stop the target app first.");
-         return;
+         _logMain("[!] WARNING: $_targetPackage is already running.");
+         _logMain("[*] Recommended: Force Stop app first.");
        }
     } catch(e) {}
 
-    // [CORE] Check SELinux
+    // SELinux Notification
     if (!_selinuxPermissive) {
-      _logMain("[!] ABORT: SELinux is ENFORCING.");
-      _logMain("[*] Please turn OFF SELinux using the button above.");
-      return;
+      _logMain("[!] WARNING: SELinux is ENFORCING.");
+      _logMain("[*] Please turn OFF SELinux for best stability.");
     }
 
     setState(() { _isRunning = true; _logs = ""; });
     _historyExecFile?.writeAsStringSync("\n=== NEW SESSION ===\n", mode: FileMode.append);
-    _logMain("=== STARTING INJECTION v2.6.1 (WATCHER) ===");
+    _logMain("=== STARTING INJECTION v2.6.2 (STDIN) ===");
 
     try {
       File executable = File("$_internalDir/frida-bin");
@@ -396,11 +310,11 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
         if (!item.isChecked) continue;
         if (item.isVirtual) {
           if (item.virtualType == "fiau") {
-             if (!_fiauReady) { _logMain("[!] Skipped FIAU: Not downloaded."); continue; }
+             if (!_fiauReady) { _logMain("[!] Skipped FIAU: Missing."); continue; }
              sink.writeln("\n// --- MODULE: FIAU ---");
              sink.writeln(await SocuteEngineBuilder.generateFiauScript());
           } else if (item.virtualType == "fmu") {
-             if (!_fmuReady) { _logMain("[!] Skipped FMU: Not downloaded."); continue; }
+             if (!_fmuReady) { _logMain("[!] Skipped FMU: Missing."); continue; }
              sink.writeln("\n// --- MODULE: FMU ---");
              sink.writeln(await SocuteEngineBuilder.generateFmuScript());
           }
@@ -411,21 +325,34 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
           count++;
         }
       }
-
-      // [CORE] INJECT FILE WATCHER LOADER
-      _logMain("[*] Appending File Watcher Loader...");
-      sink.writeln("\n// --- MODULE: FILE WATCHER (SYSTEM) ---");
-      sink.writeln(SocuteEngineBuilder.getFileWatcherScript());
-
       await sink.close();
-      _logMain("[*] Merged $count modules + Watcher.");
+      _logMain("[*] Merged $count modules.");
 
-      _logMain("[*] Spawning $_targetPackage...");
-      String cmd = "${executable.path} -f $_targetPackage -s ${payload.path}";
+      _logMain("[*] Spawning $_targetPackage (STDIN Mode)...");
+      // [CORE] Interactive Mode (-i)
+      String cmd = "${executable.path} -f $_targetPackage -s ${payload.path} -i";
+      
       _mainProcess = await Process.start('su', ['-c', cmd]);
 
-      _mainProcess!.stdout.transform(utf8.decoder).listen((d) => _logMain(d.trim()));
+      // [CORE] ROBUST LOG SPLITTER
+      // Menggunakan LineSplitter agar output panjang tidak terpotong
+      _mainProcess!.stdout
+        .transform(utf8.decoder)
+        .transform(const LineSplitter())
+        .listen((line) {
+             if (line.trim().isEmpty) return;
+             if (line.contains("[RT]")) {
+                // Log Runtime (Clean tag)
+                String clean = line.replaceAll("[RT]", "").trim();
+                _logRuntime(clean);
+             } else {
+                // Log System
+                _logMain(line);
+             }
+      });
+      
       _mainProcess!.stderr.transform(utf8.decoder).listen((d) => _logMain("[ERR] ${d.trim()}"));
+      
       _mainProcess!.exitCode.then((code) {
         if (_isRunning) { _logMain("[!] Process terminated: $code"); _stopSequence(); }
       });
@@ -436,35 +363,69 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
     }
   }
 
-  // [CORE] RUNTIME INJECT VIA FILE WATCHER
+  // [CORE] RUNTIME INJECT VIA STDIN (Base64 + Logger Shim)
   Future<void> _injectRuntime() async {
-    if (!_isRunning) { _logMain("[!] Launch first."); return; }
-    if (_selectedRuntimeScript == null) { _logRuntime("[!] Select script."); return; }
-    
+    if (!_isRunning || _mainProcess == null) { _logMain("[!] Error: Session not active."); return; }
+    if (_selectedRuntimeScript == null) { _logRuntime("[!] Select script first."); return; }
+
     setState(() => _isRuntimeRunning = true);
-    _logRuntime("\n=== INJECTING: ${_selectedRuntimeScript!.path.split('/').last} ===");
-    
+    _logRuntime("\n>>> INJECTING: ${_selectedRuntimeScript!.path.split('/').last}");
+
     try {
-      String scriptContent = await _selectedRuntimeScript!.readAsString();
-      
-      // 1. Write to TMP in Workspace
-      File tmpFile = File("$_storageDir/runtime.tmp");
-      await tmpFile.writeAsString(scriptContent);
+      String rawCode = await _selectedRuntimeScript!.readAsString();
+      String b64Code = base64Encode(utf8.encode(rawCode));
 
-      // 2. Move to /data/local/tmp/socute/runtime.tmp (Atomic prep)
-      await Process.run('su', ['-c', 'cp ${tmpFile.path} /data/local/tmp/socute/runtime.tmp']);
-      
-      // 3. Chmod 777 (Permission Fix)
-      await Process.run('su', ['-c', 'chmod 777 /data/local/tmp/socute/runtime.tmp']);
+      // WRAPPER dengan ADVANCED LOGGER SHIM & FORMATTER
+      String wrapper = '''
+(function() {
+    try {
+        if (!globalThis.hasShim) {
+            var _l = console.log;
+            var _e = console.error;
 
-      // 4. Rename to runtime.js (Atomic Trigger)
-      await Process.run('su', ['-c', 'mv /data/local/tmp/socute/runtime.tmp /data/local/tmp/socute/runtime.js']);
+            // Helper for objects/arrays
+            function fmt(args) {
+                var items = [];
+                for(var i=0; i<args.length; i++) {
+                    var a = args[i];
+                    if (typeof a === 'object' && a !== null) {
+                        try { items.push(JSON.stringify(a)); } catch(e){ items.push(a.toString()); }
+                    } else { items.push(a); }
+                }
+                return items.join(" ");
+            }
+
+            console.log = function() { _l("[RT] " + fmt(arguments)); };
+            console.error = function() { _e("[RT] [ERR] " + fmt(arguments)); };
+            globalThis.hasShim = true;
+        }
+
+        var b64 = "$b64Code";
+        var dec = "";
+        if (typeof atob === 'function') {
+            dec = atob(b64);
+        } else {
+            var B = Java.use("android.util.Base64");
+            var b = B.decode(b64, 0);
+            var S = Java.use("java.lang.String");
+            dec = S.\$new(b).toString();
+        }
+        
+        console.log("Executing " + dec.length + " bytes...");
+        (1, eval)(dec);
+        
+    } catch(e) { console.error("STDIN FAIL: " + e); }
+})();
+''';
+      // Flatten to one line for stdin
+      String oneLiner = wrapper.replaceAll('\n', ' ');
       
-      _logRuntime("[OK] Payload Delivered via File Watcher.");
-      setState(() => _isRuntimeRunning = false);
+      _mainProcess!.stdin.writeln(oneLiner);
+      await _mainProcess!.stdin.flush();
       
     } catch (e) {
-      _logRuntime("[!] Watcher Inject Failed: $e");
+      _logRuntime("[!] Injection Failed: $e");
+    } finally {
       setState(() => _isRuntimeRunning = false);
     }
   }
@@ -478,9 +439,10 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
 
   void _viewPayload() async {
     File p = File("$_internalDir/payload.js");
-    if (!p.existsSync()) { _logMain("[!] Payload not found."); return; }
-    String content = await p.readAsString();
-    if(mounted) showDialog(context: context, builder: (_) => PayloadViewerDialog(code: content));
+    if (p.existsSync()) {
+        String content = await p.readAsString();
+        if(mounted) showDialog(context: context, builder: (_) => PayloadViewerDialog(code: content));
+    }
   }
 
   @override
@@ -488,7 +450,7 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
     return Scaffold(
       backgroundColor: Colors.black,
       appBar: AppBar(
-        title: const Text("SoCute v2.6.1", style: TextStyle(fontWeight: FontWeight.bold)),
+        title: const Text("SoCute v2.6.2", style: TextStyle(fontWeight: FontWeight.bold)),
         backgroundColor: Colors.grey[900],
         actions: [
           IconButton(icon: const Icon(Icons.info_outline), onPressed: _showAbout),
@@ -505,7 +467,7 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              // 1. SELINUX STATUS CARD (REPLACES TOGGLE)
+              // 1. SELINUX STATUS & RECOMMENDATION
               Card(
                 color: _selinuxPermissive ? Colors.red[900]!.withOpacity(0.5) : Colors.green[900]!.withOpacity(0.5),
                 child: Padding(
@@ -519,6 +481,8 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
                         children: [
                           Text("SELinux Status", style: TextStyle(color: Colors.white, fontSize: 12)),
                           Text(_selinuxPermissive ? "PERMISSIVE (OFF)" : "ENFORCING (ON)", style: TextStyle(color: _selinuxPermissive ? Colors.redAccent : Colors.greenAccent, fontWeight: FontWeight.bold)),
+                          if (!_selinuxPermissive)
+                             Text("Please turn OFF for best stability", style: TextStyle(color: Colors.orange, fontSize: 10, fontStyle: FontStyle.italic))
                         ],
                       ),
                       const Spacer(),
@@ -568,15 +532,15 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
               const SizedBox(height: 15),
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: const [
+                child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: const [
                   Text("Payload Composer", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                  Text("Frida scripts to be injected on launch. Drag to reorder.", style: TextStyle(color: Colors.grey, fontSize: 11)),
+                  Text("Drag to reorder", style: TextStyle(color: Colors.grey, fontSize: 11)),
                 ]),
               ),
               Container(
                 height: 200,
                 decoration: BoxDecoration(color: Colors.grey[900], borderRadius: BorderRadius.circular(5), border: Border.all(color: Colors.white10)),
-                child: Scrollbar( // Add Scrollbar
+                child: Scrollbar(
                   thumbVisibility: true,
                   child: ReorderableListView(
                     padding: const EdgeInsets.all(5),
@@ -610,7 +574,7 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
               ElevatedButton(
                 style: ElevatedButton.styleFrom(backgroundColor: _isRunning ? Colors.red[900] : Colors.greenAccent[700], padding: const EdgeInsets.symmetric(vertical: 15)),
                 onPressed: _isRunning ? _stopSequence : _launchSequence,
-                child: Text(_isRunning ? "STOP SESSION" : "LAUNCH (WATCHER)", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
+                child: Text(_isRunning ? "STOP SESSION" : "LAUNCH (REPL MODE)", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
               ),
 
               // 7. SYSTEM LOGS
@@ -632,7 +596,7 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
               // 8. RUNTIME INJECTOR
               const Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                   Text("Runtime Injector", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                  Text("File Watcher Mode (Safe/Robust)", style: TextStyle(color: Colors.grey, fontSize: 11)),
+                  Text("STDIN Injection (Base64 Safe Mode)", style: TextStyle(color: Colors.grey, fontSize: 11)),
               ]),
               const SizedBox(height: 10),
               Row(
@@ -677,8 +641,6 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
     );
   }
 
-  // --- WIDGET BUILDERS ---
-
   Widget _buildTabsArea() {
     return Container(
       margin: const EdgeInsets.symmetric(vertical: 10),
@@ -695,7 +657,6 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
     );
   }
 
-  // Refactored Log Toolbar for Correct Fullscreen
   Widget _buildLogToolbar(String title, String content, {required VoidCallback onClear, VoidCallback? onViewPayload, File? historyFile, bool isRuntime = false}) {
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -708,7 +669,7 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
             IconButton(icon: const Icon(Icons.copy, color: Colors.blue, size: 18), onPressed: () => Clipboard.setData(ClipboardData(text: content))),
             IconButton(icon: const Icon(Icons.delete_sweep, color: Colors.red, size: 18), onPressed: onClear),
             IconButton(icon: const Icon(Icons.fullscreen, color: Colors.white, size: 18), onPressed: () => showDialog(context: context, builder: (c) => Dialog(backgroundColor: Colors.black, child: Stack(children: [
-              Container( // Pretty Box similar to Save Log
+              Container(
                   width: double.infinity, height: double.infinity,
                   padding: const EdgeInsets.all(15),
                   decoration: BoxDecoration(border: Border.all(color: isRuntime ? Colors.cyan : Colors.green)),
@@ -723,7 +684,7 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
   }
 
   void _showAbout() {
-    showDialog(context: context, builder: (ctx) => AlertDialog(backgroundColor: Colors.grey[900], title: const Text("SoCute v2.6.1", style: TextStyle(color: Colors.white)), content: const Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+    showDialog(context: context, builder: (ctx) => AlertDialog(backgroundColor: Colors.grey[900], title: const Text("SoCute v2.6.2", style: TextStyle(color: Colors.white)), content: const Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
        Text("Credits:", style: TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold)),
        Text("• Frida: frida.re", style: TextStyle(color: Colors.grey)),
        Text("• FIAU: github.com/httptoolkit", style: TextStyle(color: Colors.grey)),
@@ -731,6 +692,7 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
        Text("• SoCute: Milio48", style: TextStyle(color: Colors.grey)),
        SizedBox(height: 10),
        Text("License: AGPL-3.0", style: TextStyle(color: Colors.orangeAccent)),
+       Text("Build: 2024-STDIN-FINAL", style: TextStyle(color: Colors.grey, fontSize: 10)),
     ]), actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("CLOSE"))]));
   }
 
@@ -766,7 +728,25 @@ class _ConfigDialogState extends State<ConfigDialog> {
   void _loadPrefs() async { final prefs = await SharedPreferences.getInstance(); setState(() { _certCtrl.text = prefs.getString('cfg_cert') ?? ""; _ipCtrl.text = prefs.getString('cfg_ip') ?? ""; _portCtrl.text = prefs.getString('cfg_port') ?? ""; _ignoredCtrl.text = prefs.getString('cfg_ignored') ?? ""; _debug = prefs.getBool('cfg_debug') ?? false; _blockHttp3 = prefs.getBool('cfg_http3') ?? true; _socks5 = prefs.getBool('cfg_socks5') ?? false; }); }
   void _save() async { final prefs = await SharedPreferences.getInstance(); await prefs.setString('cfg_cert', _certCtrl.text); await prefs.setString('cfg_ip', _ipCtrl.text); await prefs.setString('cfg_port', _portCtrl.text); await prefs.setString('cfg_ignored', _ignoredCtrl.text); await prefs.setBool('cfg_debug', _debug); await prefs.setBool('cfg_http3', _blockHttp3); await prefs.setBool('cfg_socks5', _socks5); if(mounted) Navigator.pop(context); }
   void _pickCert() async { FilePickerResult? r = await FilePicker.platform.pickFiles(); if (r!=null) { File f = File(r.files.single.path!); _certCtrl.text = await f.readAsString(); } }
-  @override Widget build(BuildContext context) { return AlertDialog(backgroundColor: Colors.grey[900], title: const Text("FIAU Config", style: TextStyle(color: Colors.white)), content: SingleChildScrollView(child: Column(children: [const SizedBox(height: 10), TextField(controller: _certCtrl, maxLines: 3, style: const TextStyle(color: Colors.white, fontSize: 10), decoration: InputDecoration(filled: true, fillColor: Colors.black, hintText: "CERT PEM", suffixIcon: IconButton(icon: const Icon(Icons.folder), onPressed: _pickCert))), const SizedBox(height: 5), Row(children: [Expanded(child: TextField(controller: _ipCtrl, style: const TextStyle(color: Colors.white), decoration: const InputDecoration(labelText: "Proxy IP", hintText: "192.168.1.x"))), const SizedBox(width: 5), Expanded(child: TextField(controller: _portCtrl, style: const TextStyle(color: Colors.white), decoration: const InputDecoration(labelText: "Port", hintText: "8080")))]), TextField(controller: _ignoredCtrl, style: const TextStyle(color: Colors.white), decoration: const InputDecoration(labelText: "Ignored Ports", hintText: "e.g. 22, 53")), SwitchListTile(title: const Text("Block HTTP/3", style: TextStyle(color: Colors.white)), value: _blockHttp3, onChanged: (v) => setState(() => _blockHttp3 = v)), SwitchListTile(title: const Text("SOCKS5", style: TextStyle(color: Colors.white)), value: _socks5, onChanged: (v) => setState(() => _socks5 = v)), SwitchListTile(title: const Text("Debug", style: TextStyle(color: Colors.white)), value: _debug, onChanged: (v) => setState(() => _debug = v))])), actions: [ElevatedButton(onPressed: _save, child: const Text("SAVE"))]); }
+  
+  // FIAU DOWNLOADER ACTION
+  void _downloadFiau() async {
+      try {
+          await SocuteEngineBuilder.downloadScript(SocuteEngineBuilder.FIAU_URL, SocuteEngineBuilder.FIAU_FILENAME);
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("FIAU Script Downloaded!")));
+      } catch (e) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Err: $e"), backgroundColor: Colors.red));
+      }
+  }
+
+  @override Widget build(BuildContext context) { return AlertDialog(backgroundColor: Colors.grey[900], title: const Text("FIAU Config", style: TextStyle(color: Colors.white)), content: SingleChildScrollView(child: Column(children: [
+      // [FIX] Button Download restored
+      SizedBox(width: double.infinity, child: ElevatedButton.icon(icon: const Icon(Icons.download), label: const Text("Download Latest FIAU Script"), onPressed: _downloadFiau, style: ElevatedButton.styleFrom(backgroundColor: Colors.orange[900]))),
+      const SizedBox(height: 10), 
+      // [FIX] Hint Text Updated
+      TextField(controller: _certCtrl, maxLines: 3, style: const TextStyle(color: Colors.white, fontSize: 10), decoration: InputDecoration(filled: true, fillColor: Colors.black, hintText: "-----BEGIN CERTIFICATE-----\n....\n-----END CERTIFICATE-----", suffixIcon: IconButton(icon: const Icon(Icons.folder), onPressed: _pickCert))), 
+      const SizedBox(height: 5), 
+      Row(children: [Expanded(child: TextField(controller: _ipCtrl, style: const TextStyle(color: Colors.white), decoration: const InputDecoration(labelText: "Proxy IP", hintText: "192.168.1.x"))), const SizedBox(width: 5), Expanded(child: TextField(controller: _portCtrl, style: const TextStyle(color: Colors.white), decoration: const InputDecoration(labelText: "Port", hintText: "8080")))]), TextField(controller: _ignoredCtrl, style: const TextStyle(color: Colors.white), decoration: const InputDecoration(labelText: "Ignored Ports", hintText: "e.g. 22, 53")), SwitchListTile(title: const Text("Block HTTP/3", style: TextStyle(color: Colors.white)), value: _blockHttp3, onChanged: (v) => setState(() => _blockHttp3 = v)), SwitchListTile(title: const Text("SOCKS5", style: TextStyle(color: Colors.white)), value: _socks5, onChanged: (v) => setState(() => _socks5 = v)), SwitchListTile(title: const Text("Debug", style: TextStyle(color: Colors.white)), value: _debug, onChanged: (v) => setState(() => _debug = v))])), actions: [ElevatedButton(onPressed: _save, child: const Text("SAVE"))]); }
 }
 
 class ScriptManagerPage extends StatefulWidget { final String storageDir; const ScriptManagerPage({super.key, required this.storageDir}); @override State<ScriptManagerPage> createState() => _ScriptManagerPageState(); }
@@ -779,7 +759,7 @@ class _ScriptManagerPageState extends State<ScriptManagerPage> {
 }
 
 // ==========================================
-// EDITOR: FIXED LINE NUMBERS
+// EDITOR: FIXED LINE NUMBERS (HORIZONTAL SCROLL)
 // ==========================================
 class ManualLineNumberEditor extends StatefulWidget { final TextEditingController controller; final bool readOnly; const ManualLineNumberEditor({super.key, required this.controller, this.readOnly = false}); @override State<ManualLineNumberEditor> createState() => _ManualLineNumberEditorState(); }
 class _ManualLineNumberEditorState extends State<ManualLineNumberEditor> {
@@ -792,12 +772,29 @@ class _ManualLineNumberEditorState extends State<ManualLineNumberEditor> {
     if (buffer.toString().trim() != _lineNumbers.trim()) setState(() => _lineNumbers = buffer.toString());
   }
   @override Widget build(BuildContext context) {
-    // FIX: Using height property in TextStyle to enforce sync
+    // [FIX] Anti Word Wrap Logic: SingleChildScrollView(Horizontal) -> SizedBox(Large Width)
     const textStyle = TextStyle(fontFamily: 'monospace', fontSize: 13, height: 1.2);
-    return Container(color: const Color(0xFF1E1E1E), child: SingleChildScrollView(child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+    return Container(color: const Color(0xFF1E1E1E), child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Container(padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 10), color: const Color(0xFF2D2D2D), child: Text(_lineNumbers, textAlign: TextAlign.right, style: textStyle.copyWith(color: Colors.grey))),
-        Expanded(child: Padding(padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 0), child: TextField(controller: widget.controller, maxLines: null, readOnly: widget.readOnly, style: textStyle.copyWith(color: Colors.greenAccent), decoration: const InputDecoration(border: InputBorder.none, contentPadding: EdgeInsets.only(top: 10, bottom: 10)))))
-    ])));
+        Expanded(
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: SizedBox(
+              width: 10000, // Very wide to prevent wrapping
+              child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 0),
+                  child: TextField(
+                      controller: widget.controller,
+                      maxLines: null,
+                      readOnly: widget.readOnly,
+                      style: textStyle.copyWith(color: Colors.greenAccent),
+                      decoration: const InputDecoration(border: InputBorder.none, contentPadding: EdgeInsets.only(top: 10, bottom: 10))
+                  )
+              ),
+            ),
+          )
+        )
+    ]));
   }
 }
 
