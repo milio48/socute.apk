@@ -11,6 +11,7 @@ import 'package:device_info_plus/device_info_plus.dart';
 import 'package:device_apps/device_apps.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:pty/pty.dart'; // [CORE] Wajib ada untuk Runtime Inject
 
 // --- MAIN ENTRY POINT ---
 void main() {
@@ -116,11 +117,13 @@ class LauncherPage extends StatefulWidget {
 
 class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   // Logs & Process
-  String _logs = "Initializing SoCute v2.6.2 (Hidden Tunnel)...\n";
+  String _logs = "Initializing SoCute v2.6.2 (PTY Edition)...\n";
   String _runtimeLogs = "";
   bool _isRunning = false;
   bool _isRuntimeRunning = false;
-  Process? _mainProcess;
+  
+  // [CORE] Menggunakan PseudoTerminal bukan Process biasa
+  PseudoTerminal? _mainPty;
   
   // History Files
   File? _historyExecFile;
@@ -136,7 +139,7 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
   late TabController _tabController;
   
   // Downloader
-  final TextEditingController _fridaVersionCtrl = TextEditingController(text: "17.5.2"); // Keep original version
+  final TextEditingController _fridaVersionCtrl = TextEditingController(text: "17.5.2");
   String _selectedArch = "arm64";
   String _hostCpu = "Unknown";
   final List<String> _archOptions = ["arm64", "arm", "x86", "x86_64"];
@@ -150,9 +153,6 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
   
   bool _fiauReady = false;
   bool _fmuReady = false;
-
-  // [CORE] FIFO Config
-  final String _fifoPath = "/data/local/tmp/socute.fifo";
 
   @override
   void initState() {
@@ -275,7 +275,7 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
     } catch (e) { _logMain("[!] Download Failed: $e"); }
   }
 
-  // --- LAUNCH LOGIC (v2.6.2 - Hidden Tunnel FIFO + LineSplitter) ---
+  // --- LAUNCH LOGIC (v2.6.2 - TRUE PTY IMPLEMENTATION) ---
   Future<void> _launchSequence() async {
     if (_targetPackage.isEmpty) { _logMain("[!] Select target app first!"); return; }
     File binary = File("$_storageDir/frida-inject");
@@ -289,7 +289,6 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
        }
     } catch(e) {}
 
-    // SELinux Notification
     if (!_selinuxPermissive) {
       _logMain("[!] WARNING: SELinux is ENFORCING.");
       _logMain("[*] Please turn OFF SELinux for best stability.");
@@ -297,7 +296,7 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
 
     setState(() { _isRunning = true; _logs = ""; });
     _historyExecFile?.writeAsStringSync("\n=== NEW SESSION ===\n", mode: FileMode.append);
-    _logMain("=== STARTING INJECTION v2.6.2 (FIFO TUNNEL) ===");
+    _logMain("=== STARTING INJECTION v2.6.2 (PTY NATIVE) ===");
 
     try {
       File executable = File("$_internalDir/frida-bin");
@@ -331,43 +330,39 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
       await sink.close();
       _logMain("[*] Merged $count modules.");
 
-      // [CORE] SETUP HIDDEN TUNNEL (FIFO)
-      _logMain("[*] Building FIFO Tunnel: $_fifoPath");
-      await Process.run('su', ['-c', 'rm -f $_fifoPath']); // Bersihkan lorong lama
-      await Process.run('su', ['-c', 'mkfifo $_fifoPath']); // Buat lorong baru
-      await Process.run('su', ['-c', 'chmod 777 $_fifoPath']); // Buka akses
-
-      _logMain("[*] Spawning $_targetPackage (Listen to Tunnel)...");
+      _logMain("[*] Allocating Pseudo-Terminal (PTY)...");
       
-      // LOGIKA TUNNEL:
-      // "tail -f FIFO" akan terus membaca dari lorong (tidak putus).
-      // Pipe (|) akan meneruskan data dari tail ke frida.
-      String cmd = "tail -f $_fifoPath | ${executable.path} -f $_targetPackage -s ${payload.path} -i";
-      
-      _mainProcess = await Process.start('su', ['-c', cmd]);
+      // [CORE] PTY START
+      // Kita jalankan 'su' di dalam terminal palsu.
+      // Frida akan melihat ini sebagai Terminal Asli, jadi flag -i akan bekerja.
+      _mainPty = PseudoTerminal.start(
+        'su', 
+        [], 
+        blocking: false
+      );
 
-      // [CORE] ROBUST LOG SPLITTER
-      // Menggunakan LineSplitter agar output panjang tidak terpotong
-      _mainProcess!.stdout
+      // Listen Output dari PTY (Stream<Uint8List>)
+      _mainPty!.out
         .transform(utf8.decoder)
         .transform(const LineSplitter())
         .listen((line) {
              if (line.trim().isEmpty) return;
              if (line.contains("[RT]")) {
-                // Log Runtime (Clean tag)
+                // Runtime Log
                 String clean = line.replaceAll("[RT]", "").trim();
                 _logRuntime(clean);
              } else {
-                // Log System
+                // System Log
                 _logMain(line);
              }
       });
+
+      // [CORE] Jalankan Frida di dalam shell 'su' yang sudah terbuka di PTY
+      String cmd = "${executable.path} -f $_targetPackage -s ${payload.path} -i";
+      _logMain("[*] Sending command to PTY: $cmd");
       
-      _mainProcess!.stderr.transform(utf8.decoder).listen((d) => _logMain("[ERR] ${d.trim()}"));
-      
-      _mainProcess!.exitCode.then((code) {
-        if (_isRunning) { _logMain("[!] Process terminated: $code"); _stopSequence(); }
-      });
+      // Tulis perintah + Enter (\n)
+      _mainPty!.write(cmd + "\n");
 
     } catch (e) {
       _logMain("[!!!] LAUNCH FAILED: $e");
@@ -375,10 +370,14 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
     }
   }
 
-  // [CORE] RUNTIME INJECT VIA FIFO (Base64 + Logger Shim)
+  // [CORE] RUNTIME INJECT VIA PTY WRITE
   Future<void> _injectRuntime() async {
-    if (!_isRunning || _mainProcess == null) { _logMain("[!] Error: Session not active."); return; }
-    if (_selectedRuntimeScript == null) { _logRuntime("[!] Select script first."); return; }
+    if (!_isRunning || _mainPty == null) { 
+        _logMain("[!] Error: Session not active."); return; 
+    }
+    if (_selectedRuntimeScript == null) { 
+        _logRuntime("[!] Select script first."); return; 
+    }
 
     setState(() => _isRuntimeRunning = true);
     _logRuntime("\n>>> INJECTING: ${_selectedRuntimeScript!.path.split('/').last}");
@@ -387,15 +386,13 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
       String rawCode = await _selectedRuntimeScript!.readAsString();
       String b64Code = base64Encode(utf8.encode(rawCode));
 
-      // WRAPPER dengan ADVANCED LOGGER SHIM & FORMATTER
+      // WRAPPER dengan ADVANCED LOGGER SHIM
       String wrapper = '''
 (function() {
     try {
         if (!globalThis.hasShim) {
             var _l = console.log;
             var _e = console.error;
-
-            // Helper for objects/arrays
             function fmt(args) {
                 var items = [];
                 for(var i=0; i<args.length; i++) {
@@ -406,7 +403,6 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
                 }
                 return items.join(" ");
             }
-
             console.log = function() { _l("[RT] " + fmt(arguments)); };
             console.error = function() { _e("[RT] [ERR] " + fmt(arguments)); };
             globalThis.hasShim = true;
@@ -414,9 +410,8 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
 
         var b64 = "$b64Code";
         var dec = "";
-        if (typeof atob === 'function') {
-            dec = atob(b64);
-        } else {
+        if (typeof atob === 'function') { dec = atob(b64); } 
+        else {
             var B = Java.use("android.util.Base64");
             var b = B.decode(b64, 0);
             var S = Java.use("java.lang.String");
@@ -426,24 +421,15 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
         console.log("Executing " + dec.length + " bytes...");
         (1, eval)(dec);
         
-    } catch(e) { console.error("STDIN FAIL: " + e); }
+    } catch(e) { console.error("PTY FAIL: " + e); }
 })();
 ''';
-      // SAFE INJECTION STRATEGY:
-      // 1. Tulis payload ke file temp di private dir (Anti-Shell Escape issues)
-      // 2. Gunakan 'cat' untuk mengirim isi file temp ke dalam FIFO
-      
-      File tempPayload = File("$_internalDir/rt_payload.tmp");
-      // Kita flatten dulu jadi one-liner biar rapi di FIFO
+      // Flatten
       String oneLiner = wrapper.replaceAll('\n', ' ');
-      await tempPayload.writeAsString(oneLiner);
-
-      // Kirim via 'cat' ke lorong FIFO
-      await Process.run('su', ['-c', 'cat ${tempPayload.path} >> $_fifoPath']);
       
-      // Cleanup temp
-      if (await tempPayload.exists()) await tempPayload.delete();
-
+      // [CORE] WRITE TO PTY (Seperti mengetik manual di terminal)
+      _mainPty!.write(oneLiner + "\n");
+      
     } catch (e) {
       _logRuntime("[!] Injection Failed: $e");
     } finally {
@@ -452,10 +438,12 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
   }
 
   void _stopSequence() async {
-    _mainProcess?.kill();
+    // Kill PTY Object
+    _mainPty?.kill();
+    // Force kill binary just in case
     await Process.run('su', ['-c', 'pkill -f frida-inject']);
-    await Process.run('su', ['-c', 'rm -f $_fifoPath']); // Cleanup FIFO
-    if (mounted) setState(() { _isRunning = false; _isRuntimeRunning = false; _mainProcess = null; });
+    
+    if (mounted) setState(() { _isRunning = false; _isRuntimeRunning = false; _mainPty = null; });
     _logMain("[*] Session Ended.");
   }
 
@@ -596,7 +584,7 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
               ElevatedButton(
                 style: ElevatedButton.styleFrom(backgroundColor: _isRunning ? Colors.red[900] : Colors.greenAccent[700], padding: const EdgeInsets.symmetric(vertical: 15)),
                 onPressed: _isRunning ? _stopSequence : _launchSequence,
-                child: Text(_isRunning ? "STOP SESSION" : "LAUNCH (FIFO TUNNEL)", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
+                child: Text(_isRunning ? "STOP SESSION" : "LAUNCH (PTY)", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
               ),
 
               // 7. SYSTEM LOGS
@@ -618,7 +606,7 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
               // 8. RUNTIME INJECTOR
               const Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                   Text("Runtime Injector", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                  Text("FIFO Tunnel Injection (Base64 Safe Mode)", style: TextStyle(color: Colors.grey, fontSize: 11)),
+                  Text("PTY Native Injection (Base64 Safe Mode)", style: TextStyle(color: Colors.grey, fontSize: 11)),
               ]),
               const SizedBox(height: 10),
               Row(
@@ -714,7 +702,7 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
        Text("• SoCute: Milio48", style: TextStyle(color: Colors.grey)),
        SizedBox(height: 10),
        Text("License: AGPL-3.0", style: TextStyle(color: Colors.orangeAccent)),
-       Text("Build: 2024-FIFO-TUNNEL", style: TextStyle(color: Colors.grey, fontSize: 10)),
+       Text("Build: 2024-PTY-NATIVE", style: TextStyle(color: Colors.grey, fontSize: 10)),
     ]), actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("CLOSE"))]));
   }
 
