@@ -1,7 +1,7 @@
 import 'dart:io';
 import 'dart:convert';
 import 'dart:async';
-import 'dart:typed_data'; // Penting untuk Socket handling
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:dio/dio.dart';
@@ -13,7 +13,6 @@ import 'package:device_apps/device_apps.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:file_picker/file_picker.dart';
 
-// --- MAIN ENTRY POINT ---
 void main() {
   runApp(const MaterialApp(
     title: "SoCute Injector",
@@ -22,7 +21,6 @@ void main() {
   ));
 }
 
-// --- DATA MODELS ---
 class ScriptItem {
   File? file;
   String virtualType; 
@@ -41,7 +39,6 @@ class ScriptItem {
   });
 }
 
-// --- ENGINE BUILDER (v2.6.2) ---
 class SocuteEngineBuilder {
   static const String FIAU_FILENAME = "fiau_template.js";
   static const String FMU_FILENAME = "fmu_template.js";
@@ -75,7 +72,6 @@ class SocuteEngineBuilder {
     if (!await templateFile.exists()) return "// [ERROR] FIAU Template missing."; 
 
     String content = await templateFile.readAsString();
-    // Configs
     String cert = prefs.getString('cfg_cert') ?? "";
     String ip = prefs.getString('cfg_ip') ?? "127.0.0.1";
     String port = prefs.getString('cfg_port') ?? "8080";
@@ -106,9 +102,6 @@ class SocuteEngineBuilder {
   }
 }
 
-// ==========================================
-// PAGE 1: LAUNCHER
-// ==========================================
 class LauncherPage extends StatefulWidget {
   const LauncherPage({super.key});
   @override
@@ -116,34 +109,28 @@ class LauncherPage extends StatefulWidget {
 }
 
 class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderStateMixin, WidgetsBindingObserver {
-  // Logs & Process
-  String _logs = "Initializing SoCute v2.6.2 (TCP Socket Edition)...\n";
+  String _logs = "Initializing SoCute v2.6.2 (Correct Arch)...\n";
   String _runtimeLogs = "";
   bool _isRunning = false;
   bool _isRuntimeRunning = false;
   Process? _mainProcess;
-  Socket? _socket; // [CORE] TCP Connection to Socat
+  Socket? _socket;
   
-  // History Files
   File? _historyExecFile;
   File? _historyRuntimeFile;
 
-  // Target
   String _targetPackage = "";
   String _targetName = "Select Target App";
 
-  // Configs
   bool _selinuxPermissive = false; 
   bool _sslBypassMode = false; 
   late TabController _tabController;
   
-  // Downloader
   final TextEditingController _fridaVersionCtrl = TextEditingController(text: "17.5.2");
   String _selectedArch = "arm64";
   String _hostCpu = "Unknown";
   final List<String> _archOptions = ["arm64", "arm", "x86", "x86_64"];
 
-  // Script Data
   List<ScriptItem> _scriptItems = [];
   List<File> _availableAssets = []; 
   File? _selectedRuntimeScript;
@@ -152,6 +139,9 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
   
   bool _fiauReady = false;
   bool _fmuReady = false;
+
+  // [CORE CHANGE] Execution Environment Path (Linux Standard)
+  final String _execEnv = "/data/local/tmp/socute";
 
   @override
   void initState() {
@@ -185,7 +175,6 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
       if (!_historyExecFile!.existsSync()) _historyExecFile!.createSync();
       if (!_historyRuntimeFile!.existsSync()) _historyRuntimeFile!.createSync();
 
-      // Detect Host CPU
       var androidInfo = await DeviceInfoPlugin().androidInfo;
       String abi = "arm64-v8a";
       if (androidInfo.supportedAbis.isNotEmpty) {
@@ -261,12 +250,10 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
     _historyRuntimeFile?.writeAsStringSync(line, mode: FileMode.append);
   }
 
-  // [CORE] DOWNLOAD MANAGER (Frida + Socat)
   Future<void> _downloadBinary(BuildContext ctx) async {
     Navigator.pop(ctx);
     if (_storageDir == null) return;
     try {
-      // 1. Download Frida
       _logMain("[*] Downloading Frida...");
       String ver = _fridaVersionCtrl.text;
       String urlFrida = "https://github.com/frida/frida/releases/download/$ver/frida-inject-$ver-android-$_selectedArch.xz";
@@ -279,7 +266,6 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
       File(tempFrida).deleteSync();
       _logMain("[OK] Frida $_selectedArch installed.");
 
-      // 2. Download Socat
       _logMain("[*] Downloading Socat...");
       String socatFolder = "aarch64"; 
       if (_selectedArch == "x86_64") socatFolder = "x86_64";
@@ -295,19 +281,19 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
     } catch (e) { _logMain("[!] Download Failed: $e"); }
   }
 
-  // --- LAUNCH LOGIC (v2.6.2 - SOCAT TCP SOCKET) ---
+  // --- LAUNCH LOGIC (CORRECT ENVIRONMENT: /data/local/tmp) ---
   Future<void> _launchSequence() async {
-    // [FIX] Reset log di awal
     setState(() { _isRunning = true; _logs = ""; });
-    _historyExecFile?.writeAsStringSync("\n=== NEW SESSION (TCP) ===\n", mode: FileMode.append);
+    _historyExecFile?.writeAsStringSync("\n=== NEW SESSION ===\n", mode: FileMode.append);
     
     if (_targetPackage.isEmpty) { _logMain("[!] Select target app first!"); setState(() => _isRunning = false); return; }
     
-    File binaryFrida = File("$_storageDir/frida-inject");
-    File binarySocat = File("$_storageDir/socat");
+    // Check Storage (Source)
+    File srcFrida = File("$_storageDir/frida-inject");
+    File srcSocat = File("$_storageDir/socat");
     
-    if (!binaryFrida.existsSync() || !binarySocat.existsSync()) { 
-        _logMain("[!] Binaries missing. Download first."); 
+    if (!srcFrida.existsSync() || !srcSocat.existsSync()) { 
+        _logMain("[!] Binaries missing in Storage. Download first."); 
         setState(() => _isRunning = false); 
         return; 
     }
@@ -316,7 +302,6 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
        var res = await Process.run('su', ['-c', 'pidof $_targetPackage']);
        if (res.stdout.toString().trim().isNotEmpty) {
          _logMain("[!] WARNING: $_targetPackage is already running.");
-         _logMain("[*] Recommended: Force Stop app first.");
        }
     } catch(e) {}
 
@@ -325,26 +310,30 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
       _logMain("[*] Please turn OFF SELinux for best stability.");
     }
 
-    _logMain("=== STARTING INJECTION (TCP SOCKET: 1337) ===");
+    _logMain("=== INITIALIZING ENVIRONMENT ===");
 
     try {
-      // 1. Setup Binaries
-      File exeFrida = File("$_internalDir/frida-bin");
-      File exeSocat = File("$_internalDir/socat-bin");
-      File exeWrapper = File("$_internalDir/runner.sh");
+      // 1. ENVIRONMENT SETUP (CRITICAL FIX: MOVE TO /data/local/tmp)
+      _logMain("[*] Deploying binaries to $_execEnv...");
       
-      if (await exeFrida.exists()) await exeFrida.delete();
-      if (await exeSocat.exists()) await exeSocat.delete();
-      if (await exeWrapper.exists()) await exeWrapper.delete();
-      
-      await exeFrida.writeAsBytes(await binaryFrida.readAsBytes());
-      await exeSocat.writeAsBytes(await binarySocat.readAsBytes());
-      
-      await Process.run('chmod', ['755', exeFrida.path]);
-      await Process.run('chmod', ['755', exeSocat.path]);
+      // Cleanup old env
+      await Process.run('su', ['-c', 'rm -rf $_execEnv']);
+      await Process.run('su', ['-c', 'mkdir -p $_execEnv']);
+      await Process.run('su', ['-c', 'chmod 777 $_execEnv']);
 
-      File payload = File("$_internalDir/payload.js");
-      var sink = payload.openWrite();
+      // Copy Binaries (Storage -> Exec Env)
+      await Process.run('su', ['-c', 'cp ${srcFrida.path} $_execEnv/frida-bin']);
+      await Process.run('su', ['-c', 'cp ${srcSocat.path} $_execEnv/socat-bin']);
+      
+      // Set Permissions
+      await Process.run('su', ['-c', 'chmod 755 $_execEnv/frida-bin']);
+      await Process.run('su', ['-c', 'chmod 755 $_execEnv/socat-bin']);
+
+      // 2. PREPARE PAYLOAD (Write to internal, then copy to tmp)
+      // Kita tulis dulu di internal karena write access Dart mudah, lalu cp via su
+      File tempPayload = File("$_internalDir/payload.tmp");
+      var sink = tempPayload.openWrite();
+      
       int count = 0;
       for (var item in _scriptItems) {
         if (!item.isChecked) continue;
@@ -366,40 +355,39 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
         }
       }
       await sink.close();
-      _logMain("[*] Merged $count modules.");
-
-      // 2. CREATE WRAPPER (Run Frida & Redirect Stderr to Stdout)
-      String fridaCmd = "${exeFrida.path} -f $_targetPackage -s ${payload.path} -i";
-      await exeWrapper.writeAsString("#!/system/bin/sh\n$fridaCmd 2>&1\n");
-      await Process.run('chmod', ['755', exeWrapper.path]);
-
-      _logMain("[*] Starting Socat Server on Port 1337...");
       
-      // 3. START SOCAT LISTENER
-      // TCP-LISTEN:1337: Buka server port 1337
-      // bind=127.0.0.1: Hanya bisa diakses dari localhost (Aman)
-      // reuseaddr: Agar port bisa langsung dipakai ulang setelah stop
-      // fork: Agar bisa menerima koneksi baru jika putus
-      // EXEC:...: Jalankan Wrapper di dalam PTY
-      String cmdSocat = "${exeSocat.path} TCP-LISTEN:1337,bind=127.0.0.1,reuseaddr,fork EXEC:'${exeWrapper.path}',pty,setsid,ctty,raw,echo=0";
+      // Move Payload to Exec Env
+      await Process.run('su', ['-c', 'cp ${tempPayload.path} $_execEnv/payload.js']);
+      await Process.run('su', ['-c', 'chmod 666 $_execEnv/payload.js']);
+      _logMain("[*] Merged $count modules to $_execEnv/payload.js");
+
+      // 3. CREATE WRAPPER IN EXEC ENV
+      File tempWrapper = File("$_internalDir/runner.tmp");
+      // Use Relative paths since we will cd into the dir
+      String fridaCmd = "./frida-bin -f $_targetPackage -s payload.js -i";
+      await tempWrapper.writeAsString("#!/system/bin/sh\ncd $_execEnv\n$fridaCmd 2>&1\n");
+      
+      await Process.run('su', ['-c', 'cp ${tempWrapper.path} $_execEnv/runner.sh']);
+      await Process.run('su', ['-c', 'chmod 755 $_execEnv/runner.sh']);
+
+      _logMain("[*] Starting Socat Bridge...");
+      
+      // 4. START SOCAT (TCP LISTENER)
+      // Kita jalankan Socat dari folder tmp juga
+      String cmdSocat = "cd $_execEnv && ./socat-bin TCP-LISTEN:1337,bind=127.0.0.1,reuseaddr,fork EXEC:'./runner.sh',pty,setsid,ctty,raw,echo=0";
       
       _mainProcess = await Process.start('su', ['-c', cmdSocat]);
-      
-      // Monitor error startup socat (misal port bentrok)
       _mainProcess!.stderr.transform(utf8.decoder).listen((d) => _logMain("[SOCAT-ERR] ${d.trim()}"));
 
-      // 4. CONNECT VIA SOCKET (Jembatan Bypass SU)
-      // Beri waktu 1 detik agar socat siap binding port
+      // 5. CONNECT SOCKET
       await Future.delayed(const Duration(seconds: 1));
       
       try {
         _socket = await Socket.connect('127.0.0.1', 1337);
         _logMain("[OK] Connected to Frida Console!");
 
-        // Listen Output dari Socket
         _socket!.cast<List<int>>().transform(utf8.decoder).transform(const LineSplitter()).listen((line) {
              if (line.trim().isEmpty) return;
-             
              if (line.contains("Spawned") || line.contains("Attaching")) {
                  _logMain("[FRIDA] $line");
              }
@@ -412,7 +400,6 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
         });
       } catch (e) {
         _logMain("[!] Socket Connection Failed: $e");
-        // Jika gagal connect, matikan proses socat
         _stopSequence();
       }
 
@@ -422,7 +409,6 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
     }
   }
 
-  // [CORE] RUNTIME INJECT VIA TCP SOCKET
   Future<void> _injectRuntime() async {
     if (!_isRunning || _socket == null) { 
         _logMain("[!] Error: Not connected."); return; 
@@ -473,8 +459,6 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
 })();
 ''';
       String oneLiner = wrapper.replaceAll('\n', ' ');
-      
-      // Kirim ke Socket -> Diterima Socat -> Masuk ke Frida PTY
       _socket!.writeln(oneLiner);
       await _socket!.flush();
       
@@ -486,24 +470,30 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
   }
 
   void _stopSequence() async {
-    _socket?.destroy(); // Putuskan koneksi TCP
+    _socket?.destroy();
     _socket = null;
     
     _mainProcess?.kill();
-    // Force kill binaries
     await Process.run('su', ['-c', 'pkill -f frida-inject']);
     await Process.run('su', ['-c', 'pkill -f socat-bin']);
+    await Process.run('su', ['-c', 'rm -rf $_execEnv']); // Cleanup
     
     if (mounted) setState(() { _isRunning = false; _isRuntimeRunning = false; _mainProcess = null; });
     _logMain("[*] Session Ended.");
   }
 
   void _viewPayload() async {
-    File p = File("$_internalDir/payload.js");
-    if (p.existsSync()) {
-        String content = await p.readAsString();
-        if(mounted) showDialog(context: context, builder: (_) => PayloadViewerDialog(code: content));
-    }
+    // Payload now resides in tmp mostly, but checking local copy or tmp copy
+    // Check tmp copy first
+    String payloadPath = "$_execEnv/payload.js";
+    try {
+        var res = await Process.run('su', ['-c', 'cat $payloadPath']);
+        if (res.exitCode == 0) {
+             if(mounted) showDialog(context: context, builder: (_) => PayloadViewerDialog(code: res.stdout.toString()));
+             return;
+        }
+    } catch(e) {}
+    _logMain("[!] Cannot view payload (Session ended or access denied)");
   }
 
   @override
@@ -528,7 +518,6 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              // 1. SELINUX STATUS & RECOMMENDATION
               Card(
                 color: _selinuxPermissive ? Colors.red[900]!.withOpacity(0.5) : Colors.green[900]!.withOpacity(0.5),
                 child: Padding(
@@ -561,7 +550,6 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
               ),
               const SizedBox(height: 10),
 
-              // 2. TARGET CARD
               Card(
                 color: Colors.grey[900],
                 child: ListTile(
@@ -572,7 +560,6 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
                 ),
               ),
 
-              // 3. SSL BYPASS TOGGLE
               SwitchListTile(
                 title: const Text("Enable SSL Bypass Mode", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
                 subtitle: const Text("Activate advanced interceptors (FIAU/FMU)", style: TextStyle(color: Colors.grey, fontSize: 11)),
@@ -581,7 +568,6 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
                 onChanged: _isRunning ? null : (v) => setState(() { _sslBypassMode = v; _refreshScripts(); }),
               ),
 
-              // 4. TABS AREA
               AnimatedCrossFade(
                 firstChild: Container(),
                 secondChild: _buildTabsArea(),
@@ -589,7 +575,6 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
                 duration: const Duration(milliseconds: 300),
               ),
 
-              // 5. PAYLOAD COMPOSER
               const SizedBox(height: 15),
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
@@ -631,14 +616,12 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
               ),
               const SizedBox(height: 10),
 
-              // 6. LAUNCH BUTTON
               ElevatedButton(
                 style: ElevatedButton.styleFrom(backgroundColor: _isRunning ? Colors.red[900] : Colors.greenAccent[700], padding: const EdgeInsets.symmetric(vertical: 15)),
                 onPressed: _isRunning ? _stopSequence : _launchSequence,
-                child: Text(_isRunning ? "STOP SESSION" : "LAUNCH (SOCAT TCP)", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
+                child: Text(_isRunning ? "STOP SESSION" : "LAUNCH (CORRECT ENV)", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
               ),
 
-              // 7. SYSTEM LOGS
               const SizedBox(height: 20),
               _buildLogToolbar("System Logs", _logs, onClear: () => setState(() => _logs = ""), onViewPayload: _viewPayload, historyFile: _historyExecFile),
               Container(
@@ -654,10 +637,9 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
 
               const Divider(color: Colors.white24, height: 40),
 
-              // 8. RUNTIME INJECTOR
               const Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                   Text("Runtime Injector", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                  Text("TCP Socket Injection (Port 1337)", style: TextStyle(color: Colors.grey, fontSize: 11)),
+                  Text("Execution in /data/local/tmp/socute", style: TextStyle(color: Colors.grey, fontSize: 11)),
               ]),
               const SizedBox(height: 10),
               Row(
@@ -753,7 +735,7 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
        Text("• SoCute: Milio48", style: TextStyle(color: Colors.grey)),
        SizedBox(height: 10),
        Text("License: AGPL-3.0", style: TextStyle(color: Colors.orangeAccent)),
-       Text("Build: 2024-SOCAT-TCP", style: TextStyle(color: Colors.grey, fontSize: 10)),
+       Text("Build: 2024-CORRECT-ARCH", style: TextStyle(color: Colors.grey, fontSize: 10)),
     ]), actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("CLOSE"))]));
   }
 
@@ -778,9 +760,6 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
   }
 }
 
-// ==========================================
-// DIALOGS & MANAGERS
-// ==========================================
 class ConfigDialog extends StatefulWidget { const ConfigDialog({super.key}); @override State<ConfigDialog> createState() => _ConfigDialogState(); }
 class _ConfigDialogState extends State<ConfigDialog> {
   final _certCtrl = TextEditingController(); final _ipCtrl = TextEditingController(); final _portCtrl = TextEditingController(); final _ignoredCtrl = TextEditingController();
@@ -790,7 +769,6 @@ class _ConfigDialogState extends State<ConfigDialog> {
   void _save() async { final prefs = await SharedPreferences.getInstance(); await prefs.setString('cfg_cert', _certCtrl.text); await prefs.setString('cfg_ip', _ipCtrl.text); await prefs.setString('cfg_port', _portCtrl.text); await prefs.setString('cfg_ignored', _ignoredCtrl.text); await prefs.setBool('cfg_debug', _debug); await prefs.setBool('cfg_http3', _blockHttp3); await prefs.setBool('cfg_socks5', _socks5); if(mounted) Navigator.pop(context); }
   void _pickCert() async { FilePickerResult? r = await FilePicker.platform.pickFiles(); if (r!=null) { File f = File(r.files.single.path!); _certCtrl.text = await f.readAsString(); } }
   
-  // FIAU DOWNLOADER ACTION
   void _downloadFiau() async {
       try {
           await SocuteEngineBuilder.downloadScript(SocuteEngineBuilder.FIAU_URL, SocuteEngineBuilder.FIAU_FILENAME);
@@ -801,10 +779,8 @@ class _ConfigDialogState extends State<ConfigDialog> {
   }
 
   @override Widget build(BuildContext context) { return AlertDialog(backgroundColor: Colors.grey[900], title: const Text("FIAU Config", style: TextStyle(color: Colors.white)), content: SingleChildScrollView(child: Column(children: [
-      // [FIX] Button Download restored
       SizedBox(width: double.infinity, child: ElevatedButton.icon(icon: const Icon(Icons.download), label: const Text("Download Latest FIAU Script"), onPressed: _downloadFiau, style: ElevatedButton.styleFrom(backgroundColor: Colors.orange[900]))),
       const SizedBox(height: 10), 
-      // [FIX] Hint Text Updated
       TextField(controller: _certCtrl, maxLines: 3, style: const TextStyle(color: Colors.white, fontSize: 10), decoration: InputDecoration(filled: true, fillColor: Colors.black, hintText: "-----BEGIN CERTIFICATE-----\n....\n-----END CERTIFICATE-----", suffixIcon: IconButton(icon: const Icon(Icons.folder), onPressed: _pickCert))), 
       const SizedBox(height: 5), 
       Row(children: [Expanded(child: TextField(controller: _ipCtrl, style: const TextStyle(color: Colors.white), decoration: const InputDecoration(labelText: "Proxy IP", hintText: "192.168.1.x"))), const SizedBox(width: 5), Expanded(child: TextField(controller: _portCtrl, style: const TextStyle(color: Colors.white), decoration: const InputDecoration(labelText: "Port", hintText: "8080")))]), TextField(controller: _ignoredCtrl, style: const TextStyle(color: Colors.white), decoration: const InputDecoration(labelText: "Ignored Ports", hintText: "e.g. 22, 53")), SwitchListTile(title: const Text("Block HTTP/3", style: TextStyle(color: Colors.white)), value: _blockHttp3, onChanged: (v) => setState(() => _blockHttp3 = v)), SwitchListTile(title: const Text("SOCKS5", style: TextStyle(color: Colors.white)), value: _socks5, onChanged: (v) => setState(() => _socks5 = v)), SwitchListTile(title: const Text("Debug", style: TextStyle(color: Colors.white)), value: _debug, onChanged: (v) => setState(() => _debug = v))])), actions: [ElevatedButton(onPressed: _save, child: const Text("SAVE"))]); }
@@ -819,9 +795,6 @@ class _ScriptManagerPageState extends State<ScriptManagerPage> {
   @override Widget build(BuildContext context) { return Scaffold(backgroundColor: Colors.grey[900], appBar: AppBar(title: const Text("Script Manager"), backgroundColor: Colors.black), floatingActionButton: FloatingActionButton(backgroundColor: Colors.blue, onPressed: () => _goToEditor(), child: const Icon(Icons.add)), body: _files.isEmpty ? const Center(child: Text("No scripts yet.", style: TextStyle(color: Colors.grey))) : ListView.builder(itemCount: _files.length, itemBuilder: (ctx, i) => Card(color: Colors.grey[850], child: ListTile(title: Text(_files[i].path.split('/').last, style: const TextStyle(color: Colors.white)), onTap: () => _goToEditor(file: _files[i]), trailing: IconButton(icon: const Icon(Icons.delete, color: Colors.red), onPressed: () => _deleteFile(_files[i])))))); }
 }
 
-// ==========================================
-// EDITOR: FIXED LINE NUMBERS (HORIZONTAL SCROLL)
-// ==========================================
 class ManualLineNumberEditor extends StatefulWidget { final TextEditingController controller; final bool readOnly; const ManualLineNumberEditor({super.key, required this.controller, this.readOnly = false}); @override State<ManualLineNumberEditor> createState() => _ManualLineNumberEditorState(); }
 class _ManualLineNumberEditorState extends State<ManualLineNumberEditor> {
   String _lineNumbers = "1";
@@ -833,7 +806,6 @@ class _ManualLineNumberEditorState extends State<ManualLineNumberEditor> {
     if (buffer.toString().trim() != _lineNumbers.trim()) setState(() => _lineNumbers = buffer.toString());
   }
   @override Widget build(BuildContext context) {
-    // [FIX] Anti Word Wrap Logic: SingleChildScrollView(Horizontal) -> SizedBox(Large Width)
     const textStyle = TextStyle(fontFamily: 'monospace', fontSize: 13, height: 1.2);
     return Container(color: const Color(0xFF1E1E1E), child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Container(padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 10), color: const Color(0xFF2D2D2D), child: Text(_lineNumbers, textAlign: TextAlign.right, style: textStyle.copyWith(color: Colors.grey))),
@@ -841,7 +813,7 @@ class _ManualLineNumberEditorState extends State<ManualLineNumberEditor> {
           child: SingleChildScrollView(
             scrollDirection: Axis.horizontal,
             child: SizedBox(
-              width: 10000, // Very wide to prevent wrapping
+              width: 10000, 
               child: Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 0),
                   child: TextField(
