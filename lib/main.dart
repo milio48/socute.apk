@@ -299,14 +299,19 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
 
   // --- LAUNCH LOGIC (v2.6.2 - SOCAT BRIDGE) ---
   Future<void> _launchSequence() async {
-    if (_targetPackage.isEmpty) { _logMain("[!] Select target app first!"); return; }
+    // [FIX 1] Reset state DI AWAL, sebelum cek apapun
+    setState(() { _isRunning = true; _logs = ""; });
+    _historyExecFile?.writeAsStringSync("\n=== NEW SESSION ===\n", mode: FileMode.append);
+    
+    if (_targetPackage.isEmpty) { _logMain("[!] Select target app first!"); setState(() => _isRunning = false); return; }
     
     File binaryFrida = File("$_storageDir/frida-inject");
     File binarySocat = File("$_storageDir/socat");
     
-    if (!binaryFrida.existsSync()) { _logMain("[!] Frida missing. Download first."); return; }
-    if (!binarySocat.existsSync()) { _logMain("[!] Socat missing. Download first."); return; }
+    if (!binaryFrida.existsSync()) { _logMain("[!] Frida missing. Download first."); setState(() => _isRunning = false); return; }
+    if (!binarySocat.existsSync()) { _logMain("[!] Socat missing. Download first."); setState(() => _isRunning = false); return; }
 
+    // [FIX 1] Logika Check sekarang aman, log tidak akan terhapus
     try {
        var res = await Process.run('su', ['-c', 'pidof $_targetPackage']);
        if (res.stdout.toString().trim().isNotEmpty) {
@@ -320,17 +325,17 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
       _logMain("[*] Please turn OFF SELinux for best stability.");
     }
 
-    setState(() { _isRunning = true; _logs = ""; });
-    _historyExecFile?.writeAsStringSync("\n=== NEW SESSION ===\n", mode: FileMode.append);
-    _logMain("=== STARTING INJECTION v2.6.2 (SOCAT BRIDGE) ===");
+    _logMain("=== STARTING INJECTION v2.6.2 (SOCAT WRAPPER) ===");
 
     try {
-      // Setup Binaries in Internal Dir (Execution Space)
+      // 1. Setup Binaries
       File exeFrida = File("$_internalDir/frida-bin");
       File exeSocat = File("$_internalDir/socat-bin");
+      File exeWrapper = File("$_internalDir/runner.sh"); // [NEW] Wrapper Script
       
       if (await exeFrida.exists()) await exeFrida.delete();
       if (await exeSocat.exists()) await exeSocat.delete();
+      if (await exeWrapper.exists()) await exeWrapper.delete();
       
       await exeFrida.writeAsBytes(await binaryFrida.readAsBytes());
       await exeSocat.writeAsBytes(await binarySocat.readAsBytes());
@@ -338,10 +343,11 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
       await Process.run('chmod', ['755', exeFrida.path]);
       await Process.run('chmod', ['755', exeSocat.path]);
 
+      // 2. Prepare Payload
       File payload = File("$_internalDir/payload.js");
       var sink = payload.openWrite();
+      // ... (Bagian Merge Script SAMA SEPERTI SEBELUMNYA) ...
       int count = 0;
-
       for (var item in _scriptItems) {
         if (!item.isChecked) continue;
         if (item.isVirtual) {
@@ -364,18 +370,21 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
       await sink.close();
       _logMain("[*] Merged $count modules.");
 
-      _logMain("[*] Spawning via Socat PTY Bridge...");
+      // 3. [CORE FIX] CREATE WRAPPER SCRIPT
+      // Kita tulis command frida ke dalam file .sh agar tidak hancur oleh tanda kutip
+      // Kita tambahkan "2>&1" agar error Frida (stderr) masuk ke stdout dan terbaca oleh kita
+      String fridaCmd = "${exeFrida.path} -f $_targetPackage -s ${payload.path} -i";
+      await exeWrapper.writeAsString("#!/system/bin/sh\n$fridaCmd 2>&1\n");
+      await Process.run('chmod', ['755', exeWrapper.path]);
+
+      _logMain("[*] Spawning Wrapper via Socat...");
       
-      // [CORE] SOCAT MAGIC
-      // Kita jalankan socat sebagai perantara.
-      // socat EXEC:"frida...",pty,setsid,ctty -
-      // artinya: Jalankan frida dalam PTY, dan sambungkan PTY itu ke STDIN/OUT socat (-)
+      // 4. [CORE] SOCAT EXECUTE WRAPPER
+      // EXEC: menjalankan script wrapper di dalam PTY
+      // ,pty,setsid,ctty: Membuat terminal environment sempurna
+      // ,raw,echo=0: Mencegah input kita dipantulkan balik (Double Echo Fix)
+      String cmdSocat = "${exeSocat.path} EXEC:'${exeWrapper.path}',pty,setsid,ctty,raw,echo=0 -";
       
-      // Escape path dengan benar jika ada spasi (biasanya tidak ada di internal dir)
-      String cmdFrida = "${exeFrida.path} -f $_targetPackage -s ${payload.path} -i";
-      String cmdSocat = "${exeSocat.path} EXEC:'$cmdFrida',pty,setsid,ctty -";
-      
-      // Jalankan socat via su
       _mainProcess = await Process.start('su', ['-c', cmdSocat]);
 
       // [CORE] ROBUST LOG SPLITTER
@@ -384,7 +393,12 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
         .transform(const LineSplitter())
         .listen((line) {
              if (line.trim().isEmpty) return;
-             if (line.contains("[RT]")) {
+             
+             // Deteksi Prompt Frida agar user tahu inject berhasil
+             if (line.contains("Spawned") || line.contains("Attaching")) {
+                 _logMain("[FRIDA] $line");
+             }
+             else if (line.contains("[RT]")) {
                 String clean = line.replaceAll("[RT]", "").trim();
                 _logRuntime(clean);
              } else {
