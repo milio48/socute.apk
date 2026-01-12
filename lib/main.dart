@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'dart:convert';
 import 'dart:async';
+import 'dart:typed_data'; // Penting untuk Socket handling
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:dio/dio.dart';
@@ -116,11 +117,12 @@ class LauncherPage extends StatefulWidget {
 
 class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   // Logs & Process
-  String _logs = "Initializing SoCute v2.6.2 (Socat Bridge)...\n";
+  String _logs = "Initializing SoCute v2.6.2 (TCP Socket Edition)...\n";
   String _runtimeLogs = "";
   bool _isRunning = false;
   bool _isRuntimeRunning = false;
   Process? _mainProcess;
+  Socket? _socket; // [CORE] TCP Connection to Socat
   
   // History Files
   File? _historyExecFile;
@@ -185,7 +187,6 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
 
       // Detect Host CPU
       var androidInfo = await DeviceInfoPlugin().androidInfo;
-      // Safety check for null
       String abi = "arm64-v8a";
       if (androidInfo.supportedAbis.isNotEmpty) {
          abi = androidInfo.supportedAbis.first.toLowerCase();
@@ -280,15 +281,12 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
 
       // 2. Download Socat
       _logMain("[*] Downloading Socat...");
-      
-      // Map _selectedArch to Repo Folder Name
-      String socatFolder = "aarch64"; // default
+      String socatFolder = "aarch64"; 
       if (_selectedArch == "x86_64") socatFolder = "x86_64";
       else if (_selectedArch == "x86") socatFolder = "i686";
       else if (_selectedArch == "arm") socatFolder = "armhf";
       
       String urlSocat = "https://raw.githubusercontent.com/milio48/static-binaries/master/$socatFolder/socat";
-      
       await Dio().download(urlSocat, "$_storageDir/socat");
       _logMain("[OK] Socat ($socatFolder) installed.");
 
@@ -297,21 +295,23 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
     } catch (e) { _logMain("[!] Download Failed: $e"); }
   }
 
-  // --- LAUNCH LOGIC (v2.6.2 - SOCAT BRIDGE) ---
+  // --- LAUNCH LOGIC (v2.6.2 - SOCAT TCP SOCKET) ---
   Future<void> _launchSequence() async {
-    // [FIX 1] Reset state DI AWAL, sebelum cek apapun
+    // [FIX] Reset log di awal
     setState(() { _isRunning = true; _logs = ""; });
-    _historyExecFile?.writeAsStringSync("\n=== NEW SESSION ===\n", mode: FileMode.append);
+    _historyExecFile?.writeAsStringSync("\n=== NEW SESSION (TCP) ===\n", mode: FileMode.append);
     
     if (_targetPackage.isEmpty) { _logMain("[!] Select target app first!"); setState(() => _isRunning = false); return; }
     
     File binaryFrida = File("$_storageDir/frida-inject");
     File binarySocat = File("$_storageDir/socat");
     
-    if (!binaryFrida.existsSync()) { _logMain("[!] Frida missing. Download first."); setState(() => _isRunning = false); return; }
-    if (!binarySocat.existsSync()) { _logMain("[!] Socat missing. Download first."); setState(() => _isRunning = false); return; }
+    if (!binaryFrida.existsSync() || !binarySocat.existsSync()) { 
+        _logMain("[!] Binaries missing. Download first."); 
+        setState(() => _isRunning = false); 
+        return; 
+    }
 
-    // [FIX 1] Logika Check sekarang aman, log tidak akan terhapus
     try {
        var res = await Process.run('su', ['-c', 'pidof $_targetPackage']);
        if (res.stdout.toString().trim().isNotEmpty) {
@@ -325,13 +325,13 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
       _logMain("[*] Please turn OFF SELinux for best stability.");
     }
 
-    _logMain("=== STARTING INJECTION v2.6.2 (SOCAT WRAPPER) ===");
+    _logMain("=== STARTING INJECTION (TCP SOCKET: 1337) ===");
 
     try {
       // 1. Setup Binaries
       File exeFrida = File("$_internalDir/frida-bin");
       File exeSocat = File("$_internalDir/socat-bin");
-      File exeWrapper = File("$_internalDir/runner.sh"); // [NEW] Wrapper Script
+      File exeWrapper = File("$_internalDir/runner.sh");
       
       if (await exeFrida.exists()) await exeFrida.delete();
       if (await exeSocat.exists()) await exeSocat.delete();
@@ -343,20 +343,18 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
       await Process.run('chmod', ['755', exeFrida.path]);
       await Process.run('chmod', ['755', exeSocat.path]);
 
-      // 2. Prepare Payload
       File payload = File("$_internalDir/payload.js");
       var sink = payload.openWrite();
-      // ... (Bagian Merge Script SAMA SEPERTI SEBELUMNYA) ...
       int count = 0;
       for (var item in _scriptItems) {
         if (!item.isChecked) continue;
         if (item.isVirtual) {
           if (item.virtualType == "fiau") {
-             if (!_fiauReady) { _logMain("[!] Skipped FIAU: Missing."); continue; }
+             if (!_fiauReady) continue;
              sink.writeln("\n// --- MODULE: FIAU ---");
              sink.writeln(await SocuteEngineBuilder.generateFiauScript());
           } else if (item.virtualType == "fmu") {
-             if (!_fmuReady) { _logMain("[!] Skipped FMU: Missing."); continue; }
+             if (!_fmuReady) continue;
              sink.writeln("\n// --- MODULE: FMU ---");
              sink.writeln(await SocuteEngineBuilder.generateFmuScript());
           }
@@ -370,31 +368,38 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
       await sink.close();
       _logMain("[*] Merged $count modules.");
 
-      // 3. [CORE FIX] CREATE WRAPPER SCRIPT
-      // Kita tulis command frida ke dalam file .sh agar tidak hancur oleh tanda kutip
-      // Kita tambahkan "2>&1" agar error Frida (stderr) masuk ke stdout dan terbaca oleh kita
+      // 2. CREATE WRAPPER (Run Frida & Redirect Stderr to Stdout)
       String fridaCmd = "${exeFrida.path} -f $_targetPackage -s ${payload.path} -i";
       await exeWrapper.writeAsString("#!/system/bin/sh\n$fridaCmd 2>&1\n");
       await Process.run('chmod', ['755', exeWrapper.path]);
 
-      _logMain("[*] Spawning Wrapper via Socat...");
+      _logMain("[*] Starting Socat Server on Port 1337...");
       
-      // 4. [CORE] SOCAT EXECUTE WRAPPER
-      // EXEC: menjalankan script wrapper di dalam PTY
-      // ,pty,setsid,ctty: Membuat terminal environment sempurna
-      // ,raw,echo=0: Mencegah input kita dipantulkan balik (Double Echo Fix)
-      String cmdSocat = "${exeSocat.path} EXEC:'${exeWrapper.path}',pty,setsid,ctty,raw,echo=0 -";
+      // 3. START SOCAT LISTENER
+      // TCP-LISTEN:1337: Buka server port 1337
+      // bind=127.0.0.1: Hanya bisa diakses dari localhost (Aman)
+      // reuseaddr: Agar port bisa langsung dipakai ulang setelah stop
+      // fork: Agar bisa menerima koneksi baru jika putus
+      // EXEC:...: Jalankan Wrapper di dalam PTY
+      String cmdSocat = "${exeSocat.path} TCP-LISTEN:1337,bind=127.0.0.1,reuseaddr,fork EXEC:'${exeWrapper.path}',pty,setsid,ctty,raw,echo=0";
       
       _mainProcess = await Process.start('su', ['-c', cmdSocat]);
+      
+      // Monitor error startup socat (misal port bentrok)
+      _mainProcess!.stderr.transform(utf8.decoder).listen((d) => _logMain("[SOCAT-ERR] ${d.trim()}"));
 
-      // [CORE] ROBUST LOG SPLITTER
-      _mainProcess!.stdout
-        .transform(utf8.decoder)
-        .transform(const LineSplitter())
-        .listen((line) {
+      // 4. CONNECT VIA SOCKET (Jembatan Bypass SU)
+      // Beri waktu 1 detik agar socat siap binding port
+      await Future.delayed(const Duration(seconds: 1));
+      
+      try {
+        _socket = await Socket.connect('127.0.0.1', 1337);
+        _logMain("[OK] Connected to Frida Console!");
+
+        // Listen Output dari Socket
+        _socket!.cast<List<int>>().transform(utf8.decoder).transform(const LineSplitter()).listen((line) {
              if (line.trim().isEmpty) return;
              
-             // Deteksi Prompt Frida agar user tahu inject berhasil
              if (line.contains("Spawned") || line.contains("Attaching")) {
                  _logMain("[FRIDA] $line");
              }
@@ -404,13 +409,12 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
              } else {
                 _logMain(line);
              }
-      });
-      
-      _mainProcess!.stderr.transform(utf8.decoder).listen((d) => _logMain("[ERR] ${d.trim()}"));
-      
-      _mainProcess!.exitCode.then((code) {
-        if (_isRunning) { _logMain("[!] Process terminated: $code"); _stopSequence(); }
-      });
+        });
+      } catch (e) {
+        _logMain("[!] Socket Connection Failed: $e");
+        // Jika gagal connect, matikan proses socat
+        _stopSequence();
+      }
 
     } catch (e) {
       _logMain("[!!!] LAUNCH FAILED: $e");
@@ -418,10 +422,10 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
     }
   }
 
-  // [CORE] RUNTIME INJECT VIA SOCAT PIPE (Standard STDIN)
+  // [CORE] RUNTIME INJECT VIA TCP SOCKET
   Future<void> _injectRuntime() async {
-    if (!_isRunning || _mainProcess == null) { 
-        _logMain("[!] Error: Session not active."); return; 
+    if (!_isRunning || _socket == null) { 
+        _logMain("[!] Error: Not connected."); return; 
     }
     if (_selectedRuntimeScript == null) { 
         _logRuntime("[!] Select script first."); return; 
@@ -434,7 +438,6 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
       String rawCode = await _selectedRuntimeScript!.readAsString();
       String b64Code = base64Encode(utf8.encode(rawCode));
 
-      // WRAPPER dengan ADVANCED LOGGER SHIM
       String wrapper = '''
 (function() {
     try {
@@ -465,20 +468,15 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
             var S = Java.use("java.lang.String");
             dec = S.\$new(b).toString();
         }
-        
-        console.log("Executing " + dec.length + " bytes...");
         (1, eval)(dec);
-        
     } catch(e) { console.error("INJECT FAIL: " + e); }
 })();
 ''';
-      // Flatten
       String oneLiner = wrapper.replaceAll('\n', ' ');
       
-      // Karena kita pakai Socat, STDIN kita terhubung langsung ke PTY Frida
-      // Jadi kita cukup writeln ke process Dart
-      _mainProcess!.stdin.writeln(oneLiner);
-      await _mainProcess!.stdin.flush();
+      // Kirim ke Socket -> Diterima Socat -> Masuk ke Frida PTY
+      _socket!.writeln(oneLiner);
+      await _socket!.flush();
       
     } catch (e) {
       _logRuntime("[!] Injection Failed: $e");
@@ -488,8 +486,11 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
   }
 
   void _stopSequence() async {
+    _socket?.destroy(); // Putuskan koneksi TCP
+    _socket = null;
+    
     _mainProcess?.kill();
-    // Kill socat dan frida
+    // Force kill binaries
     await Process.run('su', ['-c', 'pkill -f frida-inject']);
     await Process.run('su', ['-c', 'pkill -f socat-bin']);
     
@@ -634,7 +635,7 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
               ElevatedButton(
                 style: ElevatedButton.styleFrom(backgroundColor: _isRunning ? Colors.red[900] : Colors.greenAccent[700], padding: const EdgeInsets.symmetric(vertical: 15)),
                 onPressed: _isRunning ? _stopSequence : _launchSequence,
-                child: Text(_isRunning ? "STOP SESSION" : "LAUNCH (SOCAT)", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
+                child: Text(_isRunning ? "STOP SESSION" : "LAUNCH (SOCAT TCP)", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
               ),
 
               // 7. SYSTEM LOGS
@@ -656,7 +657,7 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
               // 8. RUNTIME INJECTOR
               const Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                   Text("Runtime Injector", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                  Text("Socat Bridge Injection (Base64 Safe Mode)", style: TextStyle(color: Colors.grey, fontSize: 11)),
+                  Text("TCP Socket Injection (Port 1337)", style: TextStyle(color: Colors.grey, fontSize: 11)),
               ]),
               const SizedBox(height: 10),
               Row(
@@ -752,7 +753,7 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
        Text("• SoCute: Milio48", style: TextStyle(color: Colors.grey)),
        SizedBox(height: 10),
        Text("License: AGPL-3.0", style: TextStyle(color: Colors.orangeAccent)),
-       Text("Build: 2024-SOCAT-BRIDGE", style: TextStyle(color: Colors.grey, fontSize: 10)),
+       Text("Build: 2024-SOCAT-TCP", style: TextStyle(color: Colors.grey, fontSize: 10)),
     ]), actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("CLOSE"))]));
   }
 
