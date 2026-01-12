@@ -1,7 +1,6 @@
 import 'dart:io';
 import 'dart:convert';
 import 'dart:async';
-import 'dart:typed_data'; // Tambahkan ini untuk Uint8List
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:dio/dio.dart';
@@ -12,7 +11,6 @@ import 'package:device_info_plus/device_info_plus.dart';
 import 'package:device_apps/device_apps.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:file_picker/file_picker.dart';
-import 'package:pty/pty.dart'; // [CORE] PTY Library
 
 // --- MAIN ENTRY POINT ---
 void main() {
@@ -118,13 +116,11 @@ class LauncherPage extends StatefulWidget {
 
 class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   // Logs & Process
-  String _logs = "Initializing SoCute v2.6.2 (PTY Edition)...\n";
+  String _logs = "Initializing SoCute v2.6.2 (Socat Bridge)...\n";
   String _runtimeLogs = "";
   bool _isRunning = false;
   bool _isRuntimeRunning = false;
-  
-  // [CORE] Menggunakan PseudoTerminal bukan Process biasa
-  PseudoTerminal? _mainPty;
+  Process? _mainProcess;
   
   // History Files
   File? _historyExecFile;
@@ -189,8 +185,11 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
 
       // Detect Host CPU
       var androidInfo = await DeviceInfoPlugin().androidInfo;
-      // [FIX] Gunakan .first.toString() agar aman dari null error
-      var abi = androidInfo.supportedAbis.first.toString().toLowerCase();
+      // Safety check for null
+      String abi = "arm64-v8a";
+      if (androidInfo.supportedAbis.isNotEmpty) {
+         abi = androidInfo.supportedAbis.first.toLowerCase();
+      }
       
       _hostCpu = abi;
       if (abi.contains("x86_64")) _selectedArch = "x86_64";
@@ -261,28 +260,52 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
     _historyRuntimeFile?.writeAsStringSync(line, mode: FileMode.append);
   }
 
+  // [CORE] DOWNLOAD MANAGER (Frida + Socat)
   Future<void> _downloadBinary(BuildContext ctx) async {
     Navigator.pop(ctx);
     if (_storageDir == null) return;
     try {
+      // 1. Download Frida
       _logMain("[*] Downloading Frida...");
       String ver = _fridaVersionCtrl.text;
-      String url = "https://github.com/frida/frida/releases/download/$ver/frida-inject-$ver-android-$_selectedArch.xz";
-      String tempPath = "$_storageDir/temp.xz";
-      await Dio().download(url, tempPath);
-      List<int> xzBytes = File(tempPath).readAsBytesSync();
+      String urlFrida = "https://github.com/frida/frida/releases/download/$ver/frida-inject-$ver-android-$_selectedArch.xz";
+      String tempFrida = "$_storageDir/temp_frida.xz";
+      
+      await Dio().download(urlFrida, tempFrida);
+      List<int> xzBytes = File(tempFrida).readAsBytesSync();
       List<int> tarBytes = XZDecoder().decodeBytes(xzBytes);
       File("$_storageDir/frida-inject")..createSync()..writeAsBytesSync(tarBytes);
-      File(tempPath).deleteSync();
-      _logMain("[OK] Binary $_selectedArch ($ver) Installed!");
+      File(tempFrida).deleteSync();
+      _logMain("[OK] Frida $_selectedArch installed.");
+
+      // 2. Download Socat
+      _logMain("[*] Downloading Socat...");
+      
+      // Map _selectedArch to Repo Folder Name
+      String socatFolder = "aarch64"; // default
+      if (_selectedArch == "x86_64") socatFolder = "x86_64";
+      else if (_selectedArch == "x86") socatFolder = "i686";
+      else if (_selectedArch == "arm") socatFolder = "armhf";
+      
+      String urlSocat = "https://raw.githubusercontent.com/milio48/static-binaries/master/$socatFolder/socat";
+      
+      await Dio().download(urlSocat, "$_storageDir/socat");
+      _logMain("[OK] Socat ($socatFolder) installed.");
+
+      _logMain("[OK] All dependencies ready!");
+
     } catch (e) { _logMain("[!] Download Failed: $e"); }
   }
 
-  // --- LAUNCH LOGIC (v2.6.2 - TRUE PTY IMPLEMENTATION) ---
+  // --- LAUNCH LOGIC (v2.6.2 - SOCAT BRIDGE) ---
   Future<void> _launchSequence() async {
     if (_targetPackage.isEmpty) { _logMain("[!] Select target app first!"); return; }
-    File binary = File("$_storageDir/frida-inject");
-    if (!binary.existsSync()) { _logMain("[!] Binary missing. Download first."); return; }
+    
+    File binaryFrida = File("$_storageDir/frida-inject");
+    File binarySocat = File("$_storageDir/socat");
+    
+    if (!binaryFrida.existsSync()) { _logMain("[!] Frida missing. Download first."); return; }
+    if (!binarySocat.existsSync()) { _logMain("[!] Socat missing. Download first."); return; }
 
     try {
        var res = await Process.run('su', ['-c', 'pidof $_targetPackage']);
@@ -299,13 +322,21 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
 
     setState(() { _isRunning = true; _logs = ""; });
     _historyExecFile?.writeAsStringSync("\n=== NEW SESSION ===\n", mode: FileMode.append);
-    _logMain("=== STARTING INJECTION v2.6.2 (PTY NATIVE) ===");
+    _logMain("=== STARTING INJECTION v2.6.2 (SOCAT BRIDGE) ===");
 
     try {
-      File executable = File("$_internalDir/frida-bin");
-      if (await executable.exists()) await executable.delete();
-      await executable.writeAsBytes(await binary.readAsBytes());
-      await Process.run('chmod', ['755', executable.path]);
+      // Setup Binaries in Internal Dir (Execution Space)
+      File exeFrida = File("$_internalDir/frida-bin");
+      File exeSocat = File("$_internalDir/socat-bin");
+      
+      if (await exeFrida.exists()) await exeFrida.delete();
+      if (await exeSocat.exists()) await exeSocat.delete();
+      
+      await exeFrida.writeAsBytes(await binaryFrida.readAsBytes());
+      await exeSocat.writeAsBytes(await binarySocat.readAsBytes());
+      
+      await Process.run('chmod', ['755', exeFrida.path]);
+      await Process.run('chmod', ['755', exeSocat.path]);
 
       File payload = File("$_internalDir/payload.js");
       var sink = payload.openWrite();
@@ -333,37 +364,39 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
       await sink.close();
       _logMain("[*] Merged $count modules.");
 
-      _logMain("[*] Allocating Pseudo-Terminal (PTY)...");
+      _logMain("[*] Spawning via Socat PTY Bridge...");
       
-      // [CORE] PTY START (FIX: Tanpa blocking parameter)
-      _mainPty = PseudoTerminal.start(
-        'su', 
-        [], 
-      );
+      // [CORE] SOCAT MAGIC
+      // Kita jalankan socat sebagai perantara.
+      // socat EXEC:"frida...",pty,setsid,ctty -
+      // artinya: Jalankan frida dalam PTY, dan sambungkan PTY itu ke STDIN/OUT socat (-)
+      
+      // Escape path dengan benar jika ada spasi (biasanya tidak ada di internal dir)
+      String cmdFrida = "${exeFrida.path} -f $_targetPackage -s ${payload.path} -i";
+      String cmdSocat = "${exeSocat.path} EXEC:'$cmdFrida',pty,setsid,ctty -";
+      
+      // Jalankan socat via su
+      _mainProcess = await Process.start('su', ['-c', cmdSocat]);
 
-      // Listen Output dari PTY (Stream<Uint8List>)
-      _mainPty!.out
-        .cast<List<int>>() // [FIX] Cast ke List<int> wajib untuk Utf8Decoder
+      // [CORE] ROBUST LOG SPLITTER
+      _mainProcess!.stdout
         .transform(utf8.decoder)
         .transform(const LineSplitter())
         .listen((line) {
              if (line.trim().isEmpty) return;
              if (line.contains("[RT]")) {
-                // Runtime Log
                 String clean = line.replaceAll("[RT]", "").trim();
                 _logRuntime(clean);
              } else {
-                // System Log
                 _logMain(line);
              }
       });
-
-      // [CORE] Jalankan Frida di dalam shell 'su' yang sudah terbuka di PTY
-      String cmd = "${executable.path} -f $_targetPackage -s ${payload.path} -i";
-      _logMain("[*] Sending command to PTY: $cmd");
       
-      // Tulis perintah + Enter (\n)
-      _mainPty!.write(cmd + "\n");
+      _mainProcess!.stderr.transform(utf8.decoder).listen((d) => _logMain("[ERR] ${d.trim()}"));
+      
+      _mainProcess!.exitCode.then((code) {
+        if (_isRunning) { _logMain("[!] Process terminated: $code"); _stopSequence(); }
+      });
 
     } catch (e) {
       _logMain("[!!!] LAUNCH FAILED: $e");
@@ -371,9 +404,9 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
     }
   }
 
-  // [CORE] RUNTIME INJECT VIA PTY WRITE
+  // [CORE] RUNTIME INJECT VIA SOCAT PIPE (Standard STDIN)
   Future<void> _injectRuntime() async {
-    if (!_isRunning || _mainPty == null) { 
+    if (!_isRunning || _mainProcess == null) { 
         _logMain("[!] Error: Session not active."); return; 
     }
     if (_selectedRuntimeScript == null) { 
@@ -422,14 +455,16 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
         console.log("Executing " + dec.length + " bytes...");
         (1, eval)(dec);
         
-    } catch(e) { console.error("PTY FAIL: " + e); }
+    } catch(e) { console.error("INJECT FAIL: " + e); }
 })();
 ''';
       // Flatten
       String oneLiner = wrapper.replaceAll('\n', ' ');
       
-      // [CORE] WRITE TO PTY (Seperti mengetik manual di terminal)
-      _mainPty!.write(oneLiner + "\n");
+      // Karena kita pakai Socat, STDIN kita terhubung langsung ke PTY Frida
+      // Jadi kita cukup writeln ke process Dart
+      _mainProcess!.stdin.writeln(oneLiner);
+      await _mainProcess!.stdin.flush();
       
     } catch (e) {
       _logRuntime("[!] Injection Failed: $e");
@@ -439,12 +474,12 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
   }
 
   void _stopSequence() async {
-    // Kill PTY Object
-    _mainPty?.kill();
-    // Force kill binary just in case
+    _mainProcess?.kill();
+    // Kill socat dan frida
     await Process.run('su', ['-c', 'pkill -f frida-inject']);
+    await Process.run('su', ['-c', 'pkill -f socat-bin']);
     
-    if (mounted) setState(() { _isRunning = false; _isRuntimeRunning = false; _mainPty = null; });
+    if (mounted) setState(() { _isRunning = false; _isRuntimeRunning = false; _mainProcess = null; });
     _logMain("[*] Session Ended.");
   }
 
@@ -585,7 +620,7 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
               ElevatedButton(
                 style: ElevatedButton.styleFrom(backgroundColor: _isRunning ? Colors.red[900] : Colors.greenAccent[700], padding: const EdgeInsets.symmetric(vertical: 15)),
                 onPressed: _isRunning ? _stopSequence : _launchSequence,
-                child: Text(_isRunning ? "STOP SESSION" : "LAUNCH (PTY)", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
+                child: Text(_isRunning ? "STOP SESSION" : "LAUNCH (SOCAT)", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
               ),
 
               // 7. SYSTEM LOGS
@@ -607,7 +642,7 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
               // 8. RUNTIME INJECTOR
               const Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                   Text("Runtime Injector", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                  Text("PTY Native Injection (Base64 Safe Mode)", style: TextStyle(color: Colors.grey, fontSize: 11)),
+                  Text("Socat Bridge Injection (Base64 Safe Mode)", style: TextStyle(color: Colors.grey, fontSize: 11)),
               ]),
               const SizedBox(height: 10),
               Row(
@@ -703,12 +738,12 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
        Text("• SoCute: Milio48", style: TextStyle(color: Colors.grey)),
        SizedBox(height: 10),
        Text("License: AGPL-3.0", style: TextStyle(color: Colors.orangeAccent)),
-       Text("Build: 2024-PTY-NATIVE", style: TextStyle(color: Colors.grey, fontSize: 10)),
+       Text("Build: 2024-SOCAT-BRIDGE", style: TextStyle(color: Colors.grey, fontSize: 10)),
     ]), actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("CLOSE"))]));
   }
 
   Widget _buildDownloader(BuildContext ctx) {
-    bool isBinaryReady = File("$_storageDir/frida-inject").existsSync();
+    bool isBinaryReady = File("$_storageDir/frida-inject").existsSync() && File("$_storageDir/socat").existsSync();
     return Padding(padding: const EdgeInsets.all(20), child: Column(mainAxisSize: MainAxisSize.min, children: [
        const Text("Binary Downloader", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
        Text("Host CPU: $_hostCpu", style: TextStyle(color: Colors.grey, fontSize: 12)),
@@ -717,7 +752,7 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
        DropdownButtonFormField(value: _selectedArch, items: _archOptions.map((a) => DropdownMenuItem(value: a, child: Text(a))).toList(), onChanged: (v) => setState(() => _selectedArch = v.toString())),
        TextField(controller: _fridaVersionCtrl, decoration: const InputDecoration(labelText: "Frida Version", hintText: "e.g. 17.5.2")),
        const SizedBox(height: 20),
-       ElevatedButton(onPressed: () => _downloadBinary(ctx), child: const Text("DOWNLOAD")),
+       ElevatedButton(onPressed: () => _downloadBinary(ctx), child: const Text("DOWNLOAD ALL (FRIDA + SOCAT)")),
        const SizedBox(height: 20),
     ]));
   }
