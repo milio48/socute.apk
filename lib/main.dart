@@ -109,7 +109,7 @@ class LauncherPage extends StatefulWidget {
 }
 
 class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderStateMixin, WidgetsBindingObserver {
-  String _logs = "Initializing SoCute v2.6.2 (Correct Arch)...\n";
+  String _logs = "Initializing SoCute v2.6.4 (Internal Storage)...\n";
   String _runtimeLogs = "";
   bool _isRunning = false;
   bool _isRuntimeRunning = false;
@@ -140,7 +140,6 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
   bool _fiauReady = false;
   bool _fmuReady = false;
 
-  // [CORE CHANGE] Execution Environment Path (Linux Standard)
   final String _execEnv = "/data/local/tmp/socute";
 
   @override
@@ -164,10 +163,13 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
 
   Future<void> _initSystem() async {
     try {
-      final extDir = await getExternalStorageDirectory();
+      // [CORE FIX] FORCE INTERNAL STORAGE ONLY
+      // Kita tidak lagi menggunakan getExternalStorageDirectory()
       final intDir = await getApplicationSupportDirectory();
-      _storageDir = extDir!.path;
-      _internalDir = intDir.path;
+      
+      _storageDir = intDir.path; // Binary disimpan di sini (Private)
+      _internalDir = intDir.path; // Config & Logs di sini
+      
       await Directory("$_storageDir/scripts").create(recursive: true);
       
       _historyExecFile = File("$_internalDir/history_exec.log");
@@ -281,56 +283,62 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
     } catch (e) { _logMain("[!] Download Failed: $e"); }
   }
 
-  // --- LAUNCH LOGIC (CORRECT ENVIRONMENT: /data/local/tmp) ---
+  // --- STREAMING DEPLOYMENT ---
+  Future<void> _deployFile(File source, String destPath) async {
+    _logMain("[*] Deploying ${source.path.split('/').last}...");
+    try {
+      final process = await Process.start('su', ['-c', 'cat > $destPath']);
+      await source.openRead().pipe(process.stdin).catchError((e) { /* Ignore broken pipe */ });
+      
+      int code = await process.exitCode;
+      if (code != 0) throw Exception("Copy failed (Exit $code)");
+      
+      await Process.run('su', ['-c', 'chmod 755 $destPath']);
+    } catch (e) {
+      throw Exception("Deploy Error: $e");
+    }
+  }
+
+  // --- LAUNCH LOGIC (INTERNAL -> TMP -> SOCKET) ---
   Future<void> _launchSequence() async {
     setState(() { _isRunning = true; _logs = ""; });
-    _historyExecFile?.writeAsStringSync("\n=== NEW SESSION ===\n", mode: FileMode.append);
+    _historyExecFile?.writeAsStringSync("\n=== NEW SESSION (INTERNAL) ===\n", mode: FileMode.append);
     
     if (_targetPackage.isEmpty) { _logMain("[!] Select target app first!"); setState(() => _isRunning = false); return; }
     
-    // Check Storage (Source)
+    // Check Internal Storage
     File srcFrida = File("$_storageDir/frida-inject");
     File srcSocat = File("$_storageDir/socat");
     
     if (!srcFrida.existsSync() || !srcSocat.existsSync()) { 
-        _logMain("[!] Binaries missing in Storage. Download first."); 
+        _logMain("[!] Binaries missing in Internal. PLEASE DOWNLOAD AGAIN."); 
         setState(() => _isRunning = false); 
         return; 
     }
 
     try {
+       await Process.run('su', ['-c', 'pkill -f socat-bin']);
        var res = await Process.run('su', ['-c', 'pidof $_targetPackage']);
        if (res.stdout.toString().trim().isNotEmpty) {
          _logMain("[!] WARNING: $_targetPackage is already running.");
        }
     } catch(e) {}
 
-    if (!_selinuxPermissive) {
-      _logMain("[!] WARNING: SELinux is ENFORCING.");
-      _logMain("[*] Please turn OFF SELinux for best stability.");
-    }
+    await Process.run('su', ['-c', 'setenforce 0']);
 
     _logMain("=== INITIALIZING ENVIRONMENT ===");
 
     try {
-      // 1. ENVIRONMENT SETUP (CRITICAL FIX: MOVE TO /data/local/tmp)
-      _logMain("[*] Deploying binaries to $_execEnv...");
-      
-      // Cleanup old env
+      // 1. SETUP ENV (TMP)
       await Process.run('su', ['-c', 'rm -rf $_execEnv']);
       await Process.run('su', ['-c', 'mkdir -p $_execEnv']);
       await Process.run('su', ['-c', 'chmod 777 $_execEnv']);
 
-      // Copy Binaries (Storage -> Exec Env)
-      await Process.run('su', ['-c', 'cp ${srcFrida.path} $_execEnv/frida-bin']);
-      await Process.run('su', ['-c', 'cp ${srcSocat.path} $_execEnv/socat-bin']);
-      
-      // Set Permissions
-      await Process.run('su', ['-c', 'chmod 755 $_execEnv/frida-bin']);
-      await Process.run('su', ['-c', 'chmod 755 $_execEnv/socat-bin']);
+      // 2. DEPLOY (Dart Internal -> Root Tmp)
+      await _deployFile(srcFrida, "$_execEnv/frida-bin");
+      await _deployFile(srcSocat, "$_execEnv/socat-bin");
 
-      // 2. PREPARE PAYLOAD (Write to internal, then copy to tmp)
-      // Kita tulis dulu di internal karena write access Dart mudah, lalu cp via su
+      // 3. PREPARE PAYLOAD
       File tempPayload = File("$_internalDir/payload.tmp");
       var sink = tempPayload.openWrite();
       
@@ -356,30 +364,22 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
       }
       await sink.close();
       
-      // Move Payload to Exec Env
-      await Process.run('su', ['-c', 'cp ${tempPayload.path} $_execEnv/payload.js']);
-      await Process.run('su', ['-c', 'chmod 666 $_execEnv/payload.js']);
-      _logMain("[*] Merged $count modules to $_execEnv/payload.js");
+      await _deployFile(tempPayload, "$_execEnv/payload.js");
+      _logMain("[*] Merged $count modules.");
 
-      // 3. CREATE WRAPPER IN EXEC ENV
-      File tempWrapper = File("$_internalDir/runner.tmp");
-      // Use Relative paths since we will cd into the dir
-      String fridaCmd = "./frida-bin -f $_targetPackage -s payload.js -i";
-      await tempWrapper.writeAsString("#!/system/bin/sh\ncd $_execEnv\n$fridaCmd 2>&1\n");
-      
-      await Process.run('su', ['-c', 'cp ${tempWrapper.path} $_execEnv/runner.sh']);
+      // 4. CREATE WRAPPER (Echo directly to tmp)
+      String runnerContent = "#!/system/bin/sh\\ncd $_execEnv\\n./frida-bin -f $_targetPackage -s payload.js -i 2>&1\\n";
+      await Process.run('su', ['-c', 'printf "$runnerContent" > $_execEnv/runner.sh']);
       await Process.run('su', ['-c', 'chmod 755 $_execEnv/runner.sh']);
 
       _logMain("[*] Starting Socat Bridge...");
       
-      // 4. START SOCAT (TCP LISTENER)
-      // Kita jalankan Socat dari folder tmp juga
-      String cmdSocat = "cd $_execEnv && ./socat-bin TCP-LISTEN:1337,bind=127.0.0.1,reuseaddr,fork EXEC:'./runner.sh',pty,setsid,ctty,raw,echo=0";
-      
+      // 5. START SOCAT (Dirty Mode)
+      String cmdSocat = "cd $_execEnv && ./socat-bin TCP-LISTEN:1337,bind=127.0.0.1,reuseaddr,fork EXEC:'./runner.sh',pty,stderr";
       _mainProcess = await Process.start('su', ['-c', cmdSocat]);
       _mainProcess!.stderr.transform(utf8.decoder).listen((d) => _logMain("[SOCAT-ERR] ${d.trim()}"));
 
-      // 5. CONNECT SOCKET
+      // 6. CONNECT SOCKET
       await Future.delayed(const Duration(seconds: 1));
       
       try {
@@ -476,15 +476,13 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
     _mainProcess?.kill();
     await Process.run('su', ['-c', 'pkill -f frida-inject']);
     await Process.run('su', ['-c', 'pkill -f socat-bin']);
-    await Process.run('su', ['-c', 'rm -rf $_execEnv']); // Cleanup
+    await Process.run('su', ['-c', 'rm -rf $_execEnv']);
     
     if (mounted) setState(() { _isRunning = false; _isRuntimeRunning = false; _mainProcess = null; });
     _logMain("[*] Session Ended.");
   }
 
   void _viewPayload() async {
-    // Payload now resides in tmp mostly, but checking local copy or tmp copy
-    // Check tmp copy first
     String payloadPath = "$_execEnv/payload.js";
     try {
         var res = await Process.run('su', ['-c', 'cat $payloadPath']);
@@ -501,7 +499,7 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
     return Scaffold(
       backgroundColor: Colors.black,
       appBar: AppBar(
-        title: const Text("SoCute v2.6.2", style: TextStyle(fontWeight: FontWeight.bold)),
+        title: const Text("SoCute v2.6.4", style: TextStyle(fontWeight: FontWeight.bold)),
         backgroundColor: Colors.grey[900],
         actions: [
           IconButton(icon: const Icon(Icons.info_outline), onPressed: _showAbout),
@@ -619,7 +617,7 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
               ElevatedButton(
                 style: ElevatedButton.styleFrom(backgroundColor: _isRunning ? Colors.red[900] : Colors.greenAccent[700], padding: const EdgeInsets.symmetric(vertical: 15)),
                 onPressed: _isRunning ? _stopSequence : _launchSequence,
-                child: Text(_isRunning ? "STOP SESSION" : "LAUNCH (CORRECT ENV)", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
+                child: Text(_isRunning ? "STOP SESSION" : "LAUNCH (INTERNAL)", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
               ),
 
               const SizedBox(height: 20),
@@ -639,7 +637,7 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
 
               const Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                   Text("Runtime Injector", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                  Text("Execution in /data/local/tmp/socute", style: TextStyle(color: Colors.grey, fontSize: 11)),
+                  Text("Internal -> Socket Bridge Injection", style: TextStyle(color: Colors.grey, fontSize: 11)),
               ]),
               const SizedBox(height: 10),
               Row(
@@ -735,7 +733,7 @@ class _LauncherPageState extends State<LauncherPage> with SingleTickerProviderSt
        Text("• SoCute: Milio48", style: TextStyle(color: Colors.grey)),
        SizedBox(height: 10),
        Text("License: AGPL-3.0", style: TextStyle(color: Colors.orangeAccent)),
-       Text("Build: 2024-CORRECT-ARCH", style: TextStyle(color: Colors.grey, fontSize: 10)),
+       Text("Build: 2024-INTERNAL-FIX", style: TextStyle(color: Colors.grey, fontSize: 10)),
     ]), actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("CLOSE"))]));
   }
 
